@@ -1,6 +1,7 @@
 """XRD 연결(xrdcheck)과 GUI 기본 동작: 열기 → 그래프 → 결과 표 → 저장."""
 
 import numpy as np
+from PySide6.QtCore import Qt
 import pytest
 
 from datalab.analysis import xrd as xrd_an
@@ -331,4 +332,46 @@ def test_db_search_filter(qtbot, tmp_path, xrd_file):
     assert d.samples.rowCount() == 1 and d.samples.item(0, 0).text() == "합금A"
     d.search.setText("없는말")
     assert d.samples.rowCount() == 0 and d.meas.rowCount() == 0
+    d.reject()
+
+
+def test_db_compare_xlsx(qtbot, tmp_path, xrd_file):
+    """비교표: 걸러진 시료의 측정 한 줄씩, 결과 열 'key (단위)', 숫자 정렬, Excel 저장."""
+    from openpyxl import load_workbook
+
+    from datalab.gui.db_dialog import DbDialog
+    from datalab.gui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.db_root = tmp_path / "db"
+    for name, hc in (("리본B", 2.5), ("리본A", 7.0)):
+        sub = tmp_path / name
+        sub.mkdir()
+        w.open_paths([str(lakeshore(sub, {"hc": hc, "mr": 10, "ms": 50}, *loop(hc)))])
+        w.list.item(w.list.count() - 1).setText(name)
+        w.save_to_db()
+    w.open_paths([str(xrd_file)])
+    w.list.item(0).setText("합금A")
+    w.save_to_db()
+
+    d = DbDialog(w, w.db_root)
+    qtbot.addWidget(d)
+    d.kind.setCurrentText("VSM")
+    c = d.compare()
+    qtbot.addWidget(c)
+    assert c.table.rowCount() == 2 and "Hc (Oe)" in c.heads and "판정" not in c.heads
+    col = c.heads.index("Hc (Oe)")
+    c.table.sortItems(col, Qt.SortOrder.DescendingOrder)
+    assert c.table.item(0, 0).text() == "리본A"  # 7.0 > 2.5, 글자 순이 아니라 숫자 순
+    out = tmp_path / "cmp.xlsx"
+    assert c.save_xlsx(str(out))
+    ws = load_workbook(out).active
+    assert [x.value for x in ws[1]] == c.heads
+    assert ws.cell(2, 1).value == "리본A" and ws.cell(2, col + 1).value == pytest.approx(7.0)
+
+    d.kind.setCurrentText("전체")
+    c2 = d.compare()
+    qtbot.addWidget(c2)
+    assert c2.table.rowCount() == 3 and "판정" in c2.heads and "Hc (Oe)" in c2.heads
     d.reject()

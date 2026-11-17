@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+                               QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from datalab import db
 
@@ -51,9 +51,13 @@ class DbDialog(QDialog):
         split.addWidget(self.meas)
         open_btn = QPushButton("선택 측정 열기")
         open_btn.clicked.connect(self.open_selected)
+        cmp_btn = QPushButton("결과 비교표...")
+        cmp_btn.setToolTip("지금 목록에 보이는 시료(검색·종류 적용)의 측정 결과를 한 표로 — 열 머리를 눌러 정렬, Excel 저장")
+        cmp_btn.clicked.connect(self.compare)
         self.info = QLabel("칸을 더블클릭해 고치면 바로 저장됩니다. 측정을 고르지 않고 열면 그 시료 측정 전부를 엽니다.")
         bottom = QHBoxLayout()
         bottom.addWidget(self.info, 1)
+        bottom.addWidget(cmp_btn)
         bottom.addWidget(open_btn)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
@@ -68,6 +72,7 @@ class DbDialog(QDialog):
         self.samples.blockSignals(True)
         kind = self.kind.currentText()
         rows = self.store.samples(self.search.text(), None if kind == "전체" else kind)
+        self._ids = [s["id"] for s in rows]
         self.samples.setRowCount(len(rows))
         for r, s in enumerate(rows):
             for c, (key, _) in enumerate(SAMPLE_COLS):
@@ -109,3 +114,54 @@ class DbDialog(QDialog):
         name = self.samples.item(self.samples.selectionModel().selectedRows()[0].row(), 0).text()
         self.main.open_paths([str(m["path"]) for m in ms], names={str(m["path"]): name for m in ms})
         return len(ms)
+
+    def compare(self) -> "CompareDialog":
+        kind = self.kind.currentText()
+        heads, rows = self.store.compare(self._ids, None if kind == "전체" else kind)
+        self._cmp = CompareDialog(self, heads, rows)
+        self._cmp.show()
+        return self._cmp
+
+
+class CompareDialog(QDialog):
+    """결과 비교표: 측정 한 줄씩. 열 머리를 누르면 정렬(숫자는 숫자 크기로), Excel 저장."""
+
+    def __init__(self, parent, heads: list[str], rows: list[list]):
+        super().__init__(parent)
+        self.heads, self.rows = heads, rows
+        self.setWindowTitle(f"결과 비교표 — 측정 {len(rows)}개")
+        self.resize(1100, 500)
+        self.table = QTableWidget(len(rows), len(heads))
+        self.table.setHorizontalHeaderLabels(heads)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        for r, row in enumerate(rows):
+            for c, v in enumerate(row):
+                it = QTableWidgetItem()
+                if isinstance(v, (int, float)):
+                    it.setData(Qt.ItemDataRole.DisplayRole, v)  # 숫자로 넣어야 정렬이 크기 순
+                else:
+                    it.setText("" if v is None else str(v))
+                self.table.setItem(r, c, it)
+        self.table.setSortingEnabled(True)
+        self.table.resizeColumnsToContents()
+        save = QPushButton("Excel로 저장...")
+        save.clicked.connect(lambda: self.save_xlsx())
+        bottom = QHBoxLayout()
+        bottom.addWidget(QLabel("열 머리를 누르면 정렬합니다. Excel에는 DB 값 그대로(정렬 전 순서) 저장합니다."), 1)
+        bottom.addWidget(save)
+        lay = QVBoxLayout(self)
+        lay.addWidget(self.table)
+        lay.addLayout(bottom)
+
+    def save_xlsx(self, path: str | None = None) -> bool:
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "Excel로 저장", str(db.DATA_DIR / "결과비교.xlsx"),
+                                                  "Excel (*.xlsx)")
+            if not path:
+                return False
+        try:
+            db.write_xlsx(path, self.heads, self.rows)
+        except OSError as e:  # Excel에서 열어 둔 파일이면 PermissionError
+            QMessageBox.warning(self, "저장 실패", f"{e}\n\nExcel에서 열려 있으면 닫고 다시 저장하세요.")
+            return False
+        return True

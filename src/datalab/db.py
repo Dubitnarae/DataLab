@@ -139,3 +139,53 @@ class Store:
                                 " WHERE sample_id = ? ORDER BY created_at, id", (sample_id,)).fetchall()
         return [{"id": i, "kind": k, "file_name": f, "measured_at": ma, "created_at": c,
                  "path": self.root / "originals" / f"{sha}{Path(f).suffix.lower()}"} for i, k, f, ma, c, sha in rows]
+
+    def compare(self, sample_ids: list[int], kind: str | None = None) -> tuple[list[str], list[list]]:
+        """결과 비교표: 측정 한 줄씩(시료 이름순). 앞 열은 시료 정보, 뒤 열은 결과 'key (단위)'(처음 나온 순서).
+
+        같은 key라도 단위가 다르면 다른 열(원본 단위 그대로 — 변환하지 않음). 값은 DB 값 그대로(숫자는 숫자).
+        """
+        if not sample_ids:
+            return [], []
+        marks = ",".join("?" * len(sample_ids))
+        meas = self.con.execute(
+            "SELECT m.id, s.name, s.composition, s.process, s.lot,"
+            " (SELECT GROUP_CONCAT(tag, ', ') FROM (SELECT tag FROM tags WHERE sample_id = s.id ORDER BY tag)),"
+            " m.kind, m.file_name, m.measured_at FROM measurements m JOIN samples s ON s.id = m.sample_id"
+            f" WHERE s.id IN ({marks}) AND (? IS NULL OR m.kind = ?) ORDER BY s.name, m.created_at, m.id",
+            (*sample_ids, kind, kind)).fetchall()
+        cols: dict[str, int] = {}
+        vals: dict[int, dict[str, object]] = {}
+        ver: dict[int, str] = {}
+        for mid, key, value, unit, av in self.con.execute(
+                f"SELECT measurement_id, key, value, unit, analysis_version FROM results"
+                f" WHERE measurement_id IN ({','.join('?' * len(meas))}) ORDER BY rowid", [m[0] for m in meas]):
+            head = f"{key} ({unit})" if unit else key
+            cols.setdefault(head, len(cols))
+            vals.setdefault(mid, {})[head] = value
+            ver[mid] = av
+        heads = ["시료", "조성", "공정", "로트", "태그", "종류", "원본 파일", "측정일", "해석 버전", *cols]
+        rows = [[*m[1:], ver.get(m[0]), *(vals.get(m[0], {}).get(h) for h in cols)] for m in meas]
+        return heads, rows
+
+
+def write_xlsx(path: str | Path, heads: list[str], rows: list[list]):
+    """비교표를 Excel로 저장한다. 첫 줄 고정·자동 필터."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "결과 비교"
+    ws.append(heads)
+    for r in rows:
+        ws.append(r)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    ws.freeze_panes = "B2"
+    if rows:
+        ws.auto_filter.ref = ws.dimensions
+    for i, h in enumerate(heads, 1):
+        width = max([len(str(h))] + [len(str(r[i - 1])) for r in rows if r[i - 1] is not None])
+        ws.column_dimensions[ws.cell(1, i).column_letter].width = min(width + 2, 50)
+    wb.save(path)
