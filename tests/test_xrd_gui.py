@@ -51,3 +51,41 @@ def test_gui_open_plot_export(qtbot, tmp_path, xrd_file):
     w.list.selectAll()
     w.remove_selected()
     assert w.list.count() == 0 and len(w.items) == 1  # VSM 항목은 남는다
+
+
+def test_edit_panel(qtbot, tmp_path):
+    """M4 ① 편집 패널: 축 범위·눈금·로그·제목(수식)·범례·선 모양·표시 이름."""
+    from datalab.gui.main_window import MainWindow
+    from datalab.plot.figures import save
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    for i in range(2):
+        (tmp_path / f"d{i}").mkdir()
+        w.open_paths([str(lakeshore(tmp_path / f"d{i}", {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5)))])
+    x, y = w.ax_w["x"], w.ax_w["y"]
+    x["min"].setText("-20")
+    x["max"].setText("20")
+    x["step"].setValue(5)
+    x["title"].setText(r"$\mu_0H$ (Oe)")
+    y["log"].setChecked(True)  # 음수 M은 matplotlib가 가림 — 오류 없이 그려져야 함
+    w.legend.setCurrentText("왼쪽 위")
+    w.redraw()
+    ax = w.fig.axes[0]
+    assert ax.get_xlim() == (-20, 20) and ax.get_yscale() == "log"
+    assert set(np.diff(ax.get_xticks())) == {5} and ax.get_xlabel() == r"$\mu_0H$ (Oe)"
+    assert ax.get_legend()._loc == 2  # upper left
+    w.list.item(0).setSelected(True)
+    w.marker.setCurrentText("○")
+    w.lw.setValue(3)
+    w.list.item(0).setText("열처리 전")
+    line = w.fig.axes[0].get_lines()[0]
+    assert line.get_marker() == "o" and line.get_linewidth() == 3 and line.get_label() == "열처리 전"
+    w.legend.setCurrentText("숨김")
+    assert w.fig.axes[0].get_legend() is None
+    y["title"].setText(r"$\nosuchcmd$")  # 수식 오류도 창이 죽지 않고 글자 그대로
+    w.redraw()
+    assert "수식 오류" in w.status.text()
+    save(w.fig, tmp_path / "e.png")
+    w.mode.setCurrentText("XRD")  # 종류를 바꾸면 축 설정을 비움
+    assert x["min"].text() == "" and not y["log"].isChecked()

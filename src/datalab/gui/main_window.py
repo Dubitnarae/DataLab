@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QImage, QKeySequence
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-                               QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
-                               QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence
+from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog,
+                               QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+                               QScrollArea, QSplitter, QTableWidget, QTabWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from datalab import __author__, __version__
 from datalab.analysis import vsm as vsm_an
@@ -43,10 +43,13 @@ class MainWindow(QMainWindow):
         # 왼쪽: 종류 + 시료 목록(체크한 것만 겹쳐 그림)
         self.mode = QComboBox()
         self.mode.addItems(["VSM", "XRD"])
+        self.mode.currentTextChanged.connect(self._reset_axes)  # VSM·XRD 축 범위가 전혀 달라 종류를 바꾸면 비운다
         self.mode.currentTextChanged.connect(self._fill_list)
         self.list = QListWidget()
         self.list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.list.itemChanged.connect(lambda _: self.redraw())
+        self.list.setToolTip("체크한 시료만 그림. 두 번 누르면 그래프 표시 이름을 바꿉니다.")
+        self.list.itemChanged.connect(self._item_changed)
+        self.list.itemSelectionChanged.connect(self._load_line)
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.addWidget(self.mode)
@@ -88,12 +91,19 @@ class MainWindow(QMainWindow):
         form.addRow(QLabel("<b>XRD</b>"))
         form.addRow(self.norm)
         form.addRow("세로 띄우기(waterfall)", self.wf)
+        edit = QFormLayout()
+        self._edit_panel(edit)
         self.table = QTableWidget()
         copy = QPushButton("결과 표 복사(Excel 붙여넣기)")
         copy.clicked.connect(self.copy_table)
         right = QWidget()
         rv = QVBoxLayout(right)
-        rv.addLayout(form)
+        tabs = QTabWidget()
+        for lay, title in ((form, "옵션"), (edit, "그래프 편집")):
+            page = QWidget()
+            page.setLayout(lay)
+            tabs.addTab(page, title)
+        rv.addWidget(tabs)
         rv.addWidget(self.table, 1)
         rv.addWidget(copy)
 
@@ -105,6 +115,115 @@ class MainWindow(QMainWindow):
         self.status = QLabel()
         self.statusBar().addWidget(self.status, 1)
         self._menus()
+        self.redraw()
+
+    def _edit_panel(self, form: QFormLayout):
+        """그래프 편집(Origin Format › Axes·Plot). 빈 칸·0은 자동."""
+        form.addRow(QLabel("빈 칸·0 = 자동"))
+        self.ax_w = {}
+        for a in "xy":
+            w = {"min": QLineEdit(), "max": QLineEdit(), "step": self._spin(0, 1e9, 0, "자동", 1),
+                 "log": QCheckBox("로그"), "title": QLineEdit()}
+            w["min"].setPlaceholderText("최소")
+            w["max"].setPlaceholderText("최대")
+            w["title"].setPlaceholderText("기본 (수식: $M_s$, $\\mu_0H$)")
+            # shortcut: matplotlib 수식은 글꼴 대체가 안 돼 $가 든 제목의 한글은 □로 나옴, 요청 오면 수식 글꼴 설정
+            w["title"].setToolTip("$...$ 안은 수식(위첨자 ^, 아래첨자 _, \\mu 등). $가 든 제목에는 한글을 쓰지 마세요.")
+            for k in ("min", "max", "title"):
+                w[k].editingFinished.connect(self.redraw)
+            w["step"].valueChanged.connect(lambda _: self.redraw())
+            w["log"].toggled.connect(lambda _: self.redraw())
+            form.addRow(f"{a.upper()} 범위", self._row(w["min"], QLabel("~"), w["max"]))
+            form.addRow(f"{a.upper()} 눈금 간격", self._row(w["step"], w["log"]))
+            form.addRow(f"{a.upper()} 축 제목", w["title"])
+            self.ax_w[a] = w
+        self.legend = QComboBox()
+        self.legend.addItems(list(figures.LEGEND_LOC))
+        self.legend.currentTextChanged.connect(lambda _: self.redraw())
+        form.addRow("범례", self.legend)
+        # 선택 시료 선 모양 — 시료 dict의 "style"에 저장
+        self.color_btn = QPushButton("색")
+        self.color_btn.clicked.connect(self._pick_color)
+        self.lw = self._spin(0, 10, 0, "기본", 0.25)
+        self.marker = QComboBox()
+        self.marker.addItems(list(figures.MARKERS))
+        self.lw.valueChanged.connect(lambda v: self._set_line(lw=v))
+        self.marker.currentTextChanged.connect(lambda t: self._set_line(marker=figures.MARKERS[t]))
+        reset = QPushButton("기본")
+        reset.clicked.connect(lambda: self._set_line(color=None, lw=0, marker="", reload=True))
+        form.addRow("선택 시료 선", self._row(self.color_btn, self.lw, self.marker, reset))
+
+    @staticmethod
+    def _row(*widgets) -> QWidget:
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        for w in widgets:
+            h.addWidget(w)
+        return box
+
+    def _axes_opts(self) -> dict:
+        o = {"legend": self.legend.currentText()}
+        for a, w in self.ax_w.items():
+            for k in ("min", "max"):
+                try:
+                    o[a + k] = float(w[k].text())
+                except ValueError:
+                    o[a + k] = None
+            o.update({a + "step": w["step"].value(), a + "log": w["log"].isChecked(), a + "title": w["title"].text()})
+        return o
+
+    def _reset_axes(self):
+        for w in self.ax_w.values():
+            for k in ("min", "max", "title"):
+                w[k].clear()
+            for k in ("step", "log"):
+                w[k].blockSignals(True)
+            w["step"].setValue(0)
+            w["log"].setChecked(False)
+            for k in ("step", "log"):
+                w[k].blockSignals(False)
+        self.legend.blockSignals(True)
+        self.legend.setCurrentText("자동")
+        self.legend.blockSignals(False)
+
+    def _selected_items(self) -> list[dict]:
+        return [self.items[li.data(Qt.ItemDataRole.UserRole)] for li in self.list.selectedItems()]
+
+    def _item_changed(self, li: QListWidgetItem):
+        it = self.items[li.data(Qt.ItemDataRole.UserRole)]
+        it["name"] = li.text().strip() or it["name"]
+        self.redraw()
+
+    def _load_line(self):
+        sel = self._selected_items()
+        st = sel[0].get("style", {}) if sel else {}
+        for w in (self.lw, self.marker):
+            w.blockSignals(True)
+        self.lw.setValue(st.get("lw") or 0)
+        self.marker.setCurrentText(next(k for k, v in figures.MARKERS.items() if v == (st.get("marker") or "")))
+        for w in (self.lw, self.marker):
+            w.blockSignals(False)
+        self.color_btn.setStyleSheet(f"background:{st['color']}" if st.get("color") else "")
+
+    def _pick_color(self):
+        sel = self._selected_items()
+        if not sel:
+            self.status.setText("목록에서 시료를 먼저 고르세요.")
+            return
+        c = QColorDialog.getColor(QColor(sel[0].get("style", {}).get("color") or "#1f77b4"), self, "선 색")
+        if c.isValid():
+            self._set_line(color=c.name())
+
+    def _set_line(self, reload: bool = False, **kw):
+        sel = self._selected_items()
+        if not sel:
+            self.status.setText("목록에서 시료를 먼저 고르세요.")
+            return
+        for it in sel:
+            it.setdefault("style", {}).update(kw)
+        if reload or "color" in kw:
+            self._load_line()
         self.redraw()
 
     def _spin(self, lo, hi, val, special, step) -> QDoubleSpinBox:
@@ -182,7 +301,7 @@ class MainWindow(QMainWindow):
         for n, it in enumerate(self.items):
             if it["kind"] == self.mode.currentText():
                 li = QListWidgetItem(it["name"])
-                li.setFlags(li.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                li.setFlags(li.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEditable)
                 li.setCheckState(Qt.CheckState.Checked)
                 li.setData(Qt.ItemDataRole.UserRole, n)  # dict는 Qt 변환으로 복사되므로 번호만
                 li.setToolTip(str(it["data"].path if it["kind"] == "VSM" else it["data"].source_path))
@@ -202,19 +321,28 @@ class MainWindow(QMainWindow):
         if self.mode.currentText() == "VSM":
             rows = self._draw_vsm(sel)
         else:
-            figures.draw_xrd(self.fig, [(it["name"], it["data"].two_theta, it["data"].counts) for it in sel],
+            figures.draw_xrd(self.fig, [(it["name"], it["data"].two_theta, it["data"].counts, it.get("style", {}))
+                                        for it in sel],
                              self.wf.value(), self.norm.isChecked())
             rows = [xrd_an.summary(it["xrd_result"]) for it in sel]
+        figures.apply_axes(self.fig.axes[0], self._axes_opts())
         self._show_table(sel, rows)
         while self.plot_layout.count():
             w = self.plot_layout.takeAt(0).widget()
+            w.hide()  # deleteLater는 다음 이벤트 때 지워져 그 사이 옛 그래프가 겹쳐 보임
             w.deleteLater()
         canvas = FigureCanvasQTAgg(self.fig)
         w, h = (self.fig.get_size_inches() * self.fig.dpi).astype(int)
         canvas.setFixedSize(int(w), int(h))
         self.plot_layout.addWidget(NavigationToolbar2QT(canvas, self.plot_box))
         self.plot_layout.addWidget(canvas)
-        canvas.draw()
+        try:
+            canvas.draw()
+        except ValueError as e:  # 축 제목 $...$ 수식 오류 — 글자 그대로 보이게 바꿔 다시 그림
+            for lab in (self.fig.axes[0].xaxis.label, self.fig.axes[0].yaxis.label):
+                lab.set_text(lab.get_text().replace("$", r"\$"))
+            canvas.draw()
+            self.status.setText("축 제목 수식 오류: " + str(e).splitlines()[0])
 
     def _draw_vsm(self, sel: list[dict]) -> list[dict]:
         off = self.offset.value()
@@ -224,7 +352,7 @@ class MainWindow(QMainWindow):
         for it in sel:
             d = it["data"]
             scale = k if d.h_unit == "Oe" else 1.0
-            data.append((it["name"], (d.h - off) * scale, d.m))
+            data.append((it["name"], (d.h - off) * scale, d.m, it.get("style", {})))
             raw = vsm_an.analyze_loop(d.h, d.m)
             r = vsm_an.analyze_loop(d.h, d.m, off) if off else raw
             hu, mu = ("kA/m" if ka and d.h_unit == "Oe" else d.h_unit), d.m_unit
