@@ -11,7 +11,8 @@ from importlib import resources
 from cycler import cycler
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPalette
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+from PySide6.QtGui import QColor, QFont, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import QApplication, QFormLayout, QWidget
 
 BLUE, BLUE_HOVER, BLUE_PRESSED, BLUE_50 = "#3182F6", "#2272EB", "#1B64DA", "#E8F3FF"
@@ -178,6 +179,41 @@ def apply(app: QApplication) -> None:
         pal.setColor(role, QColor(c))
     app.setPalette(pal)
     app.setStyleSheet(stylesheet())
+
+
+# 그래프 도구 막대 아이콘: 24칸 격자 선 그림(둥근 끝), matplotlib 그림 이름 그대로
+TOOL_ICONS = {
+    "home": '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h14V9"/><path d="M10 20v-6h4v6"/>',
+    "back": '<path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/>',
+    "forward": '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
+    "move": '<path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
+    "zoom_to_rect": '<circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5M11 8v6M8 11h6"/>',
+    "subplots": '<path d="M4 6h10M4 12h4M12 12h8M4 18h12"/>'
+                '<circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+    "qt4_editor_options": '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13 7l4 4"/>',
+    "filesave": '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
+}
+
+
+def tool_icon(name: str) -> QIcon:
+    """회색 선 아이콘, 눌린 상태(이동·확대 켜짐)는 파랑."""
+    icon = QIcon()
+    for color, state in ((GREY_700, QIcon.State.Off), (BLUE, QIcon.State.On)):
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
+               f'stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+               f'{TOOL_ICONS[name]}</svg>')
+        pm = QPixmap()
+        pm.loadFromData(svg.encode(), "SVG")
+        icon.addPixmap(pm, QIcon.Mode.Normal, state)
+    return icon
+
+
+class ToolBar(NavigationToolbar2QT):
+    """matplotlib 도구 막대에 테마 아이콘을 씌운 것."""
+
+    def _icon(self, name):
+        stem = name.rsplit(".", 1)[0]
+        return tool_icon(stem) if stem in TOOL_ICONS else super()._icon(name)
 
 
 def card(w: QWidget, margins: int = 16) -> QWidget:

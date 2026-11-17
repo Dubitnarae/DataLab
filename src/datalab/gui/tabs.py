@@ -15,7 +15,7 @@ import dataclasses
 
 import matplotlib
 import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea,
@@ -99,7 +99,7 @@ class _Tab(QWidget):
         right.setHandleWidth(12)
         top = QWidget()
         tv = QVBoxLayout(top)
-        tv.addWidget(NavigationToolbar2QT(self.canvas, top))
+        tv.addWidget(theme.ToolBar(self.canvas, top))
         tv.addWidget(self.canvas, 1)
         theme.card(top, 12)
         bottom = QWidget()

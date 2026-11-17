@@ -26,5 +26,12 @@ def test_theme_applies(qtbot):
         qtbot.addWidget(tb)
         assert tb.palette().color(tb.backgroundRole()).value() >= 128  # 어두우면 matplotlib 가 아이콘 색을 바꿔 안 보임
         assert "Noto Sans KR" not in theme.PLOT_RC["font.family"]  # matplotlib 에서 가장 얇게만 잡힘
+        for name in theme.TOOL_ICONS:  # SVG 그림이 실제로 읽히는지(꺼짐·켜짐)
+            ic = theme.tool_icon(name)
+            for st in (ic.State.Off, ic.State.On):
+                assert not ic.pixmap(24, 24, ic.Mode.Normal, st).isNull(), name
+        ttb = theme.ToolBar(FigureCanvasQTAgg(Figure()), None)
+        qtbot.addWidget(ttb)
+        assert sum(not a.icon().isNull() for a in ttb.actions()) >= 7
     finally:
         app.setStyleSheet(old)

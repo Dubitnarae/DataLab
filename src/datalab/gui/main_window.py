@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QImage, QKeySequence
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog,
@@ -695,7 +695,7 @@ class MainWindow(QMainWindow):
         canvas = FigureCanvasQTAgg(self.fig)
         w, h = (self.fig.get_size_inches() * self.fig.dpi).astype(int)
         canvas.setFixedSize(int(w), int(h))
-        self.plot_layout.addWidget(NavigationToolbar2QT(canvas, self.plot_box))
+        self.plot_layout.addWidget(theme.ToolBar(canvas, self.plot_box))
         self.plot_layout.addWidget(canvas)
         try:
             canvas.draw()
