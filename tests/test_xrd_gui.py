@@ -123,3 +123,42 @@ def test_panels_double_y(qtbot, tmp_path):
     save(w.fig, tmp_path / "p.png")
     w.mode.setCurrentText("XRD")  # XRD 빈 목록도 패널로 그려짐
     assert len(w.fig.axes) == 2
+
+
+def test_template_roundtrip(qtbot, tmp_path):
+    """M4 ③ 그래프 템플릿: JSON으로 저장 → 새 창에 불러오면 같은 그래프 모양."""
+    import json
+
+    from datalab.gui.main_window import MainWindow
+
+    def window():
+        w = MainWindow()
+        qtbot.addWidget(w)
+        for i in range(2):
+            (tmp_path / f"d{i}").mkdir(exist_ok=True)
+            w.open_paths([str(lakeshore(tmp_path / f"d{i}", {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5 + i)))])
+        return w
+
+    a = window()
+    a.style.setCurrentText("논문 1단")
+    a.layout_box.setCurrentText("세로 2패널")
+    a.h_unit.setCurrentText("kA/m")
+    a.ax_w["x"]["min"].setText("-2")
+    a.ax_w["y"]["title"].setText(r"$M$ (emu/g)")
+    a.legend.setCurrentText("왼쪽 위")
+    a.list.item(1).setSelected(True)
+    a.marker.setCurrentText("□")
+    a.lw.setValue(2)
+    a.redraw()
+    t = json.loads(json.dumps(a.template(), ensure_ascii=False))  # 파일 저장과 같은 변환
+    b = window()
+    b.apply_template(t)
+    assert b.template() == t
+    assert b.fig.axes[0].get_xlim()[0] == -2 and b.fig.axes[0].get_ylabel() == "$M$ (emu/g)"
+    assert len([x for x in b.fig.axes if x.get_xlabel()]) == 2
+    line = [x for x in b.fig.axes if x.get_xlabel()][1].get_lines()[0]
+    assert line.get_marker() == "s" and line.get_linewidth() == 2
+    with pytest.raises(ValueError):
+        b.apply_template({"style": "PPT용"})  # 템플릿 표시 없는 JSON은 거부
+    b.apply_template({"datalab_template": 1, "style": "없는 프리셋", "lines": [{"marker": "?"}]})  # 모르는 값은 건너뜀
+    assert b.style.currentText() == "논문 1단" and "marker" not in b.items[0]["style"]

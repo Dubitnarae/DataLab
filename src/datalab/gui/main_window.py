@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,8 @@ from datalab.plot import figures
 
 APP_TITLE = "DataLab"
 OPEN_FILTER = "데이터 (*.csv *.txt *.dat *.xy *.xrdml *.rasx);;모든 파일 (*)"
-SAVE_FILTER = "PNG 600 dpi (*.png);;SVG 벡터 (*.svg);;PDF 벡터 (*.pdf);;TIFF 600 dpi (*.tif)"
+TEMPLATE_DIR = Path.home() / "Documents" / "DataLab_Data" / "templates"  # CLAUDE.md: 사용자 데이터는 문서\DataLab_Data
+SAVE_FILTER ="PNG 600 dpi (*.png);;SVG 벡터 (*.svg);;PDF 벡터 (*.pdf);;TIFF 600 dpi (*.tif)"
 
 
 def _fmt(v) -> str:
@@ -188,6 +190,75 @@ class MainWindow(QMainWindow):
             o.update({a + "step": w["step"].value(), a + "log": w["log"].isChecked(), a + "title": w["title"].text()})
         return o
 
+    # ------------------------------------------------------------ 그래프 템플릿(Origin Save Template·Copy Format)
+    def template(self) -> dict:
+        """지금 그래프 모양. 자장 오프셋은 측정 보정값이라 넣지 않는다. lines는 체크한 시료 순서대로."""
+        o = self._axes_opts()
+        return {"datalab_template": 1, "mode": self.mode.currentText(), "style": self.style.currentText(),
+                "layout": self.layout_box.currentText(), "inset": self.inset.isChecked(),
+                "inset_w": self.inset_w.value(), "h_unit": self.h_unit.currentText(),
+                "norm": self.norm.isChecked(), "wf": self.wf.value(),
+                "legend": o["legend"], "y2title": o["y2title"],
+                "axes": {a: {k: o[a + k] for k in ("min", "max", "step", "log", "title")} for a in "xy"},
+                "lines": [dict(it.get("style", {})) for it in self.checked()]}
+
+    def apply_template(self, t: dict):
+        """template() 값을 화면에 넣고 한 번만 다시 그림. 모르는 값(다른 버전·손으로 고친 파일)은 건너뜀."""
+        if not isinstance(t, dict) or t.get("datalab_template") != 1:
+            raise ValueError("DataLab 그래프 템플릿 파일이 아닙니다.")
+        self._hold = True
+        try:
+            if t.get("mode") in ("VSM", "XRD"):
+                self.mode.setCurrentText(t["mode"])  # 축 값을 비우므로 먼저
+            for box, key, opts in ((self.style, "style", figures.STYLES), (self.layout_box, "layout", figures.LAYOUTS),
+                                   (self.h_unit, "h_unit", ("Oe", "kA/m")), (self.legend, "legend", figures.LEGEND_LOC)):
+                if t.get(key) in opts:
+                    box.setCurrentText(t[key])
+            for chk, key in ((self.inset, "inset"), (self.norm, "norm")):
+                if key in t:
+                    chk.setChecked(bool(t[key]))
+            for spin, key in ((self.inset_w, "inset_w"), (self.wf, "wf")):
+                if isinstance(t.get(key), (int, float)):
+                    spin.setValue(t[key])
+            self.y2title.setText(str(t.get("y2title") or ""))
+            for a, w in self.ax_w.items():
+                v = (t.get("axes") or {}).get(a) or {}
+                for k in ("min", "max"):
+                    w[k].setText("" if v.get(k) is None else f"{float(v[k]):g}")
+                w["step"].setValue(float(v.get("step") or 0))
+                w["log"].setChecked(bool(v.get("log")))
+                w["title"].setText(str(v.get("title") or ""))
+            keys = ("color", "lw", "marker", "panel", "right")
+            for it, st in zip(self.checked(), t.get("lines") or []):
+                if isinstance(st, dict):
+                    it["style"] = {k: st[k] for k in keys if k in st}
+                    if it["style"].get("marker") not in figures.MARKERS.values():
+                        it["style"].pop("marker", None)  # _load_line이 목록에 없는 기호면 멈춤
+        finally:
+            self._hold = False
+        self._load_line()
+        self.redraw()
+
+    def save_template(self):
+        TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+        path, _ = QFileDialog.getSaveFileName(self, "그래프 템플릿 저장", str(TEMPLATE_DIR / "그래프.json"),
+                                              "그래프 템플릿 (*.json)")
+        if path:
+            Path(path).write_text(json.dumps(self.template(), ensure_ascii=False, indent=1), encoding="utf-8")
+            self.status.setText(f"템플릿 저장: {path}")
+
+    def load_template(self):
+        path, _ = QFileDialog.getOpenFileName(self, "그래프 템플릿 불러오기", str(TEMPLATE_DIR), "그래프 템플릿 (*.json)")
+        if not path:
+            return
+        try:
+            self.apply_template(json.loads(Path(path).read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            self.redraw()  # 중간까지 들어간 값이라도 화면과 그래프를 맞춤
+            QMessageBox.warning(self, "템플릿 불러오기 실패", f"{path}\n{e}")
+            return
+        self.status.setText(f"템플릿 적용: {Path(path).name}")
+
     def _reset_axes(self):
         for w in self.ax_w.values():
             for k in ("min", "max", "title"):
@@ -260,6 +331,8 @@ class MainWindow(QMainWindow):
         for text, key, fn in (("열기...", QKeySequence.StandardKey.Open, self.open_dialog),
                               ("그림 저장(PNG·SVG·PDF)...", QKeySequence.StandardKey.Save, self.save_dialog),
                               ("그림 클립보드 복사(PPT 붙여넣기)", "Ctrl+Shift+C", self.copy_figure),
+                              ("그래프 템플릿 저장...", "Ctrl+Shift+T", self.save_template),
+                              ("그래프 템플릿 불러오기...", "Ctrl+T", self.load_template),
                               ("선택 시료 지우기", QKeySequence.StandardKey.Delete, self.remove_selected)):
             a = QAction(text, self)
             a.setShortcut(key)
@@ -334,6 +407,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 그리기·결과
     def redraw(self):
+        if getattr(self, "_hold", False):  # 템플릿 적용 중 — 값마다 다시 그리지 않음
+            return
         figures.apply_style(self.style.currentText())
         self.fig = figures.new_figure(self.style.currentText())
         sel = self.checked()
