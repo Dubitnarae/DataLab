@@ -8,17 +8,18 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QImage, QKeySequence
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog,
-                               QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+                               QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressDialog, QPushButton,
                                QScrollArea, QSplitter, QTableWidget, QTabWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from datalab import __author__, __version__
-from datalab import db
+from datalab import db, updater
 from datalab.analysis import vsm as vsm_an
 from datalab.analysis import xrd as xrd_an
 from datalab.io import load_any
+from datalab.gui.update_worker import UpdateCheckWorker, UpdateDownloadWorker
 from datalab.plot import figures
 
 APP_TITLE = "DataLab"
@@ -141,6 +142,9 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.status, 1)
         self._menus()
         self.redraw()
+        self._update_check = self._update_dl = None
+        if updater.install_dir():  # exe로 실행할 때만 시작 시 조용히 확인(개발·테스트에서는 네트워크 안 씀)
+            QTimer.singleShot(2000, lambda: self.check_updates(silent=True))
 
     def _edit_panel(self, form: QFormLayout):
         """그래프 편집(Origin Format › Axes·Plot). 빈 칸·0은 자동."""
@@ -363,6 +367,9 @@ class MainWindow(QMainWindow):
             a.triggered.connect(fn)
             m.addAction(a)
             self.addAction(a)
+        h = self.menuBar().addMenu("도움말")
+        h.addAction("업데이트 확인...", lambda: self.check_updates(silent=False))
+        h.addAction("정보", self.show_about)
 
     # ------------------------------------------------------------ 파일
     def dragEnterEvent(self, e):
@@ -630,3 +637,85 @@ class MainWindow(QMainWindow):
             lines.append(t.verticalHeaderItem(r).text() + "\t" + "\t".join(cells))
         QApplication.clipboard().setText("\n".join(lines))
         self.status.setText("결과 표를 복사했습니다.")
+
+    # ------------------------------------------------------------ 정보·자동 업데이트(xrdcheck GUI와 같은 흐름)
+    def show_about(self):
+        cfg = updater.load_config(updater.config_dir())
+        QMessageBox.about(self, "정보", f"<b>{APP_TITLE}</b> v{__version__}<br>개발자: {__author__}<br><br>"
+                          "VSM·XRD 해석과 논문·PPT용 그래프, 측정 이력 DB"
+                          f"<br><br>업데이트 출처: {updater.source_label(cfg)}")
+
+    def check_updates(self, silent: bool = False):
+        """silent: 시작할 때 자동 확인 — 실패하거나 최신이면 아무것도 띄우지 않는다."""
+        if self._update_check is not None and self._update_check.isRunning():
+            return
+        w = UpdateCheckWorker(updater.load_config(updater.config_dir()), self)
+        w.found.connect(lambda rel: self._on_update_found(rel, silent))
+        w.failed.connect(lambda msg: silent or QMessageBox.warning(self, "업데이트", msg))
+        self._update_check = w
+        if not silent:
+            self.status.setText("업데이트 확인 중...")
+        w.start()
+
+    def _on_update_found(self, rel, silent: bool):
+        if rel is None:
+            if not silent:
+                self.status.setText(f"최신 버전입니다(v{__version__}).")
+                QMessageBox.information(self, "업데이트", f"지금 쓰는 v{__version__}이 최신 버전입니다.")
+            return
+        self.status.setText(f"새 버전 v{rel.version}이 있습니다 — 도움말 > 업데이트 확인")
+        box = QMessageBox(self)
+        box.setWindowTitle("업데이트")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(f"새 버전 <b>v{rel.version}</b>이 있습니다(지금 v{__version__}).<br>지금 업데이트할까요?")
+        box.setInformativeText("업데이트하면 프로그램을 닫고 새 버전으로 바꾼 뒤 다시 엽니다. DB·설정은 그대로입니다.")
+        if rel.notes:
+            box.setDetailedText(rel.notes)
+        now = box.addButton("지금 업데이트", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("나중에", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is now:
+            self.start_update(rel)
+
+    def start_update(self, rel):
+        ok, why = updater.can_self_update()
+        if not ok:
+            if QMessageBox.question(self, "업데이트", why + "\n\n릴리스 위치를 열까요?") == QMessageBox.StandardButton.Yes \
+                    and rel.page_url:
+                url = rel.page_url
+                QDesktopServices.openUrl(QUrl(url) if url.startswith("http") else QUrl.fromLocalFile(url))
+            return
+        dlg = QProgressDialog(f"v{rel.version} 내려받는 중...", "취소", 0, 0, self)
+        dlg.setWindowTitle("업데이트")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        w = UpdateDownloadWorker(rel, self)
+        self._update_dl = w
+        cancelled = []
+
+        def on_progress(done_kb: int, total_kb: int):
+            if total_kb and not cancelled:
+                dlg.setMaximum(total_kb)
+                dlg.setValue(min(done_kb, total_kb))
+                dlg.setLabelText(f"v{rel.version} 내려받는 중... {done_kb / 1024:.0f} / {total_kb / 1024:.0f} MB")
+
+        def on_ready(app_dir: str):
+            dlg.close()
+            if cancelled:
+                return
+            QMessageBox.information(self, "업데이트",
+                                    f"v{rel.version}을 설치합니다. 프로그램이 잠시 닫혔다가 새 버전으로 다시 열립니다.")
+            updater.launch_apply(Path(app_dir), updater.install_dir())
+            self.close()
+            QApplication.quit()
+
+        def on_failed(msg: str):
+            dlg.close()
+            if not cancelled:
+                QMessageBox.warning(self, "업데이트", msg)
+
+        w.progress.connect(on_progress)
+        w.ready.connect(on_ready)
+        w.failed.connect(on_failed)
+        dlg.canceled.connect(lambda: cancelled.append(True))
+        w.start()
