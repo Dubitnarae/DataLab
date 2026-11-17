@@ -30,6 +30,7 @@ class VsmData:
     file_format: str = ""  # "lakeshore_csv" | "ideas_txt" | "generic"
     device: dict = field(default_factory=dict)  # 장비가 계산한 Hc·Mr·Ms(절댓값)
     meta: dict = field(default_factory=dict)
+    m_err: np.ndarray | None = field(default=None, repr=False)  # 숫자 3열 텍스트의 셋째 열(M 오차), 오차 막대용
 
 
 _NUM = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$")
@@ -87,25 +88,27 @@ def _lakeshore(lines: list[str]) -> tuple[list, list, str, str, dict, dict]:
     return h, m, sid, m_unit, device, meta
 
 
-def _columns(lines: list[str]) -> tuple[list, list, str, str]:
-    """숫자 줄에서 앞 두 열. 숫자 줄 바로 앞 글 줄을 머리줄로 보고 단위를 읽는다."""
-    h, m, header = [], [], ""
+def _columns(lines: list[str]) -> tuple[list, list, str, str, list | None]:
+    """숫자 줄에서 앞 두 열(+ 모든 줄에 셋째 숫자 열이 있으면 M 오차). 숫자 줄 바로 앞 글 줄을 머리줄로 보고 단위를 읽는다."""
+    h, m, e, header = [], [], [], ""
     for line in lines:
         c = [t for t in re.split(r"[,\t;]|\s+", line.strip()) if t]
         if len(c) >= 2 and _NUM.match(c[0]) and _NUM.match(c[1]):
             h.append(float(c[0]))
             m.append(float(c[1]))
+            e.append(float(c[2]) if len(c) >= 3 and _NUM.match(c[2]) else None)
         elif not h and line.strip():
             header = line
     units = _UNIT.findall(header)
-    return h, m, units[0] if units else "Oe", units[1] if len(units) > 1 else ""
+    err = e if e and None not in e else None
+    return h, m, units[0] if units else "Oe", units[1] if len(units) > 1 else "", err
 
 
 def read_vsm(path: str | Path, allow_generic: bool = True) -> VsmData:
     path = Path(path)
     text = _read_text(path)
     lines = text.splitlines()
-    device, meta, sid = {}, {}, ""
+    device, meta, sid, err = {}, {}, "", None
     if text.startswith("#RUN ON SOFTWARE"):
         fmt = "lakeshore_csv"
         h, m, sid, m_unit, device, meta = _lakeshore(lines)
@@ -115,14 +118,14 @@ def read_vsm(path: str | Path, allow_generic: bool = True) -> VsmData:
         if s := re.search(r"^Sample ID:\s*(.+)$", text, re.M):
             sid = s.group(1).strip()
         start = next(i for i, ln in enumerate(lines) if "***DATA***" in ln)
-        h, m, h_unit, m_unit = _columns(lines[start + 1:])
+        h, m, h_unit, m_unit, _ = _columns(lines[start + 1:])
         m_unit = m_unit or "emu/g"
     elif allow_generic:
         fmt = "generic"
-        h, m, h_unit, m_unit = _columns(lines)
+        h, m, h_unit, m_unit, err = _columns(lines)
     else:
         raise UnsupportedVsmFile(f"VSM 파일 형식이 아닙니다: {path.name}")
     if len(h) < 10:
         raise UnsupportedVsmFile(f"측정점이 10개 미만입니다: {path.name}")
     return VsmData(path, sid or path.stem, np.asarray(h, float), np.asarray(m, float),
-                   h_unit, m_unit, fmt, device, meta)
+                   h_unit, m_unit, fmt, device, meta, None if err is None else np.asarray(err, float))
