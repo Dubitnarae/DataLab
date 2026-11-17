@@ -94,3 +94,34 @@ class Store:
         """(시료 수, 측정 수)."""
         return (self.con.execute("SELECT COUNT(*) FROM samples").fetchone()[0],
                 self.con.execute("SELECT COUNT(*) FROM measurements").fetchone()[0])
+
+    def samples(self) -> list[dict]:
+        """시료 목록(이름순): id·name·composition·process·lot·memo·tags(쉼표로 이음)·n(측정 수)."""
+        rows = self.con.execute(
+            "SELECT s.id, s.name, s.composition, s.process, s.lot, s.memo,"
+            " (SELECT GROUP_CONCAT(tag, ', ') FROM (SELECT tag FROM tags WHERE sample_id = s.id ORDER BY tag)),"
+            " (SELECT COUNT(*) FROM measurements WHERE sample_id = s.id) FROM samples s ORDER BY s.name").fetchall()
+        keys = ("id", "name", "composition", "process", "lot", "memo", "tags", "n")
+        return [dict(zip(keys, r)) for r in rows]
+
+    SAMPLE_FIELDS = ("composition", "process", "lot", "memo")
+
+    def update_sample(self, sample_id: int, field: str, value: str):
+        """시료 정보 한 칸을 바꾼다. field = SAMPLE_FIELDS 또는 'tags'(쉼표로 나눈 태그 전체를 바꿈)."""
+        value = value.strip()
+        with self.con:
+            if field == "tags":
+                self.con.execute("DELETE FROM tags WHERE sample_id = ?", (sample_id,))
+                tags = {t.strip() for t in value.split(",") if t.strip()}
+                self.con.executemany("INSERT INTO tags (sample_id, tag) VALUES (?, ?)", [(sample_id, t) for t in tags])
+            elif field in self.SAMPLE_FIELDS:  # 열 이름을 SQL에 넣으므로 허용 목록만
+                self.con.execute(f"UPDATE samples SET {field} = ? WHERE id = ?", (value or None, sample_id))
+            else:
+                raise ValueError(field)
+
+    def measurements(self, sample_id: int) -> list[dict]:
+        """시료의 측정 목록: id·kind·file_name·measured_at·created_at·path(원본 사본)."""
+        rows = self.con.execute("SELECT id, kind, file_name, measured_at, created_at, file_sha256 FROM measurements"
+                                " WHERE sample_id = ? ORDER BY created_at, id", (sample_id,)).fetchall()
+        return [{"id": i, "kind": k, "file_name": f, "measured_at": ma, "created_at": c,
+                 "path": self.root / "originals" / f"{sha}{Path(f).suffix.lower()}"} for i, k, f, ma, c, sha in rows]

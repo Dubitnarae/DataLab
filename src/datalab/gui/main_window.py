@@ -356,6 +356,7 @@ class MainWindow(QMainWindow):
                               ("그래프 템플릿 저장...", "Ctrl+Shift+T", self.save_template),
                               ("그래프 템플릿 불러오기...", "Ctrl+T", self.load_template),
                               ("체크한 시료 DB에 저장", "Ctrl+D", self.save_to_db),
+                              ("DB 목록·태깅...", "Ctrl+L", self.db_dialog),
                               ("선택 시료 지우기", QKeySequence.StandardKey.Delete, self.remove_selected)):
             a = QAction(text, self)
             a.setShortcut(key)
@@ -375,7 +376,8 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(self, "파일 열기", "", OPEN_FILTER)
         self.open_paths(paths)
 
-    def open_paths(self, paths: list[str]):
+    def open_paths(self, paths: list[str], names: dict[str, str] | None = None):
+        """names = {경로: 표시 이름} — DB에서 연 원본 사본(이름이 SHA256)에 시료 이름을 붙일 때."""
         files = []
         for p in map(Path, paths):
             files += sorted(f for f in p.iterdir() if f.is_file()) if p.is_dir() else [p]
@@ -386,7 +388,8 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 errors.append(str(e))
                 continue
-            item = {"kind": kind, "name": getattr(data, "sample_id", None) or data.sample_name, "data": data}
+            item = {"kind": kind, "name": (names or {}).get(str(f)) or getattr(data, "sample_id", None)
+                    or data.sample_name, "data": data}
             if kind == "XRD":
                 self.status.setText(f"XRD 해석 중: {f.name}")
                 QApplication.processEvents()
@@ -440,6 +443,12 @@ class MainWindow(QMainWindow):
             store.close()
         self.status.setText(f"DB 저장: 새로 {new}개, 결과 갱신 {upd}개 (전체 시료 {n_s}개·측정 {n_m}개)")
         return new, upd
+
+    def db_dialog(self):
+        from datalab.gui.db_dialog import DbDialog
+
+        self._db_dlg = DbDialog(self, getattr(self, "db_root", db.DATA_DIR))
+        self._db_dlg.show()
 
     def remove_selected(self):
         gone = {i.data(Qt.ItemDataRole.UserRole) for i in self.list.selectedItems()}

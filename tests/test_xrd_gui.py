@@ -263,3 +263,36 @@ def test_db_save_dedup(qtbot, tmp_path, xrd_file):
                        " WHERE m.kind = 'XRD' AND r.key = '판정'").fetchone()[0] == 1
     con.close()
     assert len(list((w.db_root / "originals").iterdir())) == 2
+
+
+def test_db_dialog_tag_and_reopen(qtbot, tmp_path, xrd_file):
+    """DB 목록에서 조성·태그를 고치면 저장되고, 원본 사본을 시료 이름으로 다시 연다."""
+    from datalab import db
+    from datalab.gui.db_dialog import SAMPLE_COLS, DbDialog
+    from datalab.gui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.db_root = tmp_path / "db"
+    w.open_paths([str(xrd_file)])
+    w.list.item(0).setText("합금A")
+    w.save_to_db()
+    w.items.clear()
+    w._fill_list()
+
+    d = DbDialog(w, w.db_root)
+    qtbot.addWidget(d)
+    assert d.samples.rowCount() == 1 and d.meas.rowCount() == 1
+    col = {k: i for i, (k, _) in enumerate(SAMPLE_COLS)}
+    d.samples.item(0, col["composition"]).setText("Fe78Si9B13")
+    d.samples.item(0, col["tags"]).setText("리본, 열처리 ,리본")
+    assert d.open_selected() == 1
+    assert [it["name"] for it in w.items] == ["합금A"] and w.mode.currentText() == "XRD"
+    d.reject()
+
+    s = db.Store(w.db_root)
+    row = s.samples()[0]
+    assert (row["composition"], row["tags"], row["n"]) == ("Fe78Si9B13", "리본, 열처리", 1)
+    with pytest.raises(ValueError):
+        s.update_sample(1, "name; DROP TABLE samples", "x")
+    s.close()
