@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
+from datalab.gui import theme
 from datalab import db
 
 SAMPLE_COLS = (("name", "시료"), ("composition", "조성"), ("process", "공정"), ("lot", "로트"),
@@ -52,11 +53,12 @@ class DbDialog(QDialog):
         split.addWidget(self.samples)
         split.addWidget(self.meas)
         open_btn = QPushButton("선택 측정 열기")
+        theme.primary(open_btn)
         open_btn.clicked.connect(self.open_selected)
         cmp_btn = QPushButton("결과 비교표...")
         cmp_btn.setToolTip("지금 목록에 보이는 시료(검색·종류 적용)의 측정 결과를 한 표로 — 열 머리를 눌러 정렬, Excel 저장")
         cmp_btn.clicked.connect(self.compare)
-        self.info = QLabel("칸을 더블클릭해 고치면 바로 저장됩니다. 측정을 고르지 않고 열면 그 시료 측정 전부를 엽니다.")
+        self.info = theme.hint("칸을 더블클릭해 고치면 바로 저장됩니다. 측정을 고르지 않고 열면 그 시료 측정 전부를 엽니다.")
         bottom = QHBoxLayout()
         bottom.addWidget(self.info, 1)
         bak_btn = QPushButton("NAS로 백업...")

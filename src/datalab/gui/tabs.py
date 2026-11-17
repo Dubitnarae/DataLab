@@ -25,10 +25,10 @@ from PySide6.QtCore import Qt
 from datalab.analysis import fit as fit_an
 from datalab.analysis import process as proc_an
 from datalab.analysis import xrd as xrd_an
+from datalab.gui import theme
 
-# 탭 그림은 그래프 탭 스타일(전역 rcParams)과 상관없이 읽기 쉬운 화면용
-_RC = {"font.family": ["Malgun Gothic", "DejaVu Sans"], "font.size": 9, "axes.unicode_minus": False,
-       "lines.linewidth": 1.2, "xtick.direction": "in", "ytick.direction": "in"}
+# 탭 그림은 그래프 탭 스타일(전역 rcParams, 논문·PPT용)과 상관없이 화면 테마 색
+_RC = theme.PLOT_RC
 
 
 def _num(edit: QLineEdit):
@@ -47,10 +47,7 @@ def _row(*widgets) -> QWidget:
     return box
 
 
-def _wrap(text: str) -> QLabel:
-    lab = QLabel(text)
-    lab.setWordWrap(True)
-    return lab
+_wrap = theme.hint  # 회색 설명 글(줄바꿈)
 
 
 def _fill_table(t: QTableWidget, headers: list[str], rows: list[list]):
@@ -87,31 +84,45 @@ class _Tab(QWidget):
         self.fig = Figure(figsize=(6, 4.5), layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.table = QTableWidget()
+        self.table.verticalHeader().setVisible(False)  # 줄 번호 대신 깔끔하게(첫 열이 이름)
 
     def _layout(self, controls: QWidget, table_title: str = "결과"):
-        """왼쪽 조작 칸(스크롤) | 오른쪽 그림 위·표 아래."""
+        """왼쪽 조작 칸(스크롤) | 오른쪽 그림 카드 위·표 카드 아래. 조작 칸에 묶음 상자(카드)가 없으면 통째로 카드."""
+        if not controls.findChildren(QGroupBox):
+            theme.card(controls)
+        else:
+            controls.layout().setContentsMargins(0, 0, 4, 0)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(controls)
         right = QSplitter(Qt.Orientation.Vertical)
+        right.setHandleWidth(12)
         top = QWidget()
         tv = QVBoxLayout(top)
         tv.addWidget(NavigationToolbar2QT(self.canvas, top))
         tv.addWidget(self.canvas, 1)
+        theme.card(top, 12)
         bottom = QWidget()
         bv = QVBoxLayout(bottom)
+        bv.setSpacing(10)
         copy = QPushButton(f"{table_title} 표 복사(Excel 붙여넣기)")
         copy.clicked.connect(lambda: (_copy_table(self.table), self.mw.status.setText("표를 복사했습니다.")))
+        bv.addWidget(theme.section(table_title))
         bv.addWidget(self.table, 1)
         bv.addWidget(copy)
+        theme.card(bottom)
         right.addWidget(top)
         right.addWidget(bottom)
-        right.setSizes([520, 240])
+        right.setSizes([520, 260])
         split = QSplitter()
+        split.setHandleWidth(12)
         split.addWidget(scroll)
         split.addWidget(right)
-        split.setSizes([360, 900])
-        QVBoxLayout(self).addWidget(split)
+        split.setSizes([380, 900])
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 8)
+        lay.addWidget(split)
+        theme.roomy(self)
 
     def item(self) -> dict | None:
         i = self.target.currentIndex()
@@ -152,9 +163,11 @@ class ProcessTab(_Tab):
         self._cands: list[int] = []
         c = QWidget()
         v = QVBoxLayout(c)
-        f = QFormLayout()
+        v.setSpacing(12)
+        tc = QWidget()
+        f = QFormLayout(tc)
         f.addRow("대상 시료", self.target)
-        v.addLayout(f)
+        v.addWidget(theme.card(tc, 14))
 
         g = QGroupBox("해석 구간 (Origin Set Display Range)")
         gf = QFormLayout(g)
@@ -219,7 +232,7 @@ class ProcessTab(_Tab):
         v.addWidget(g)
 
         apply_b = QPushButton("적용 — 그래프·해석 값에 반영")
-        apply_b.setStyleSheet("font-weight:bold")
+        theme.primary(apply_b)
         apply_b.clicked.connect(self.apply)
         clear_b = QPushButton("이 시료 처리 모두 해제")
         clear_b.clicked.connect(self.clear)
@@ -448,7 +461,7 @@ class PeakFitTab(_Tab):
         self.base.addItems(list(fit_an.BASELINES))
         self.base.setCurrentText("직선")
         go = QPushButton("피팅")
-        go.setStyleSheet("font-weight:bold")
+        theme.primary(go)
         go.clicked.connect(self.run)
         f.addRow("대상 시료", self.target)
         f.addRow("X 구간", _row(self.lo, QLabel("~"), self.hi))
@@ -544,7 +557,7 @@ class SatFitTab(_Tab):
         for t, box in self.terms.items():
             box.setChecked(t != "a")
         go = QPushButton("피팅")
-        go.setStyleSheet("font-weight:bold")
+        theme.primary(go)
         go.clicked.connect(self.run)
         f.addRow("대상 시료(VSM)", self.target)
         f.addRow("모델", self.model)
@@ -626,12 +639,12 @@ class SheetTab(_Tab):
         self.formula = QLineEdit()
         self.formula.setPlaceholderText("예: y / 0.0123   ·   y * 1000   ·   np.log10(y)")
         self.formula.setToolTip("x, y(지금 보기의 값)와 np(numpy) 를 쓸 수 있습니다. 결과는 새 시료로 목록에 추가")
-        make = QPushButton("새 Y 로 새 시료 만들기")
+        make = theme.primary(QPushButton("새 Y 로 새 시료 만들기"))
         make.clicked.connect(self.make_sample)
         f.addRow("대상 시료", self.target)
         f.addRow("보기", self.view)
         f.addRow(csv_b)
-        f.addRow(QLabel("<b>열 계산</b> (Origin Set Column Values)"))
+        f.addRow(theme.section("열 계산 (Origin Set Column Values)"))
         f.addRow("새 Y =", self.formula)
         f.addRow(make)
         f.addRow(_wrap("만든 시료는 원본 파일이 없어 DB에 저장하지 않습니다(원본 결과를 덮지 않게)."))

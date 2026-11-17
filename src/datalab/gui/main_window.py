@@ -20,6 +20,7 @@ from datalab.analysis import process as proc_an
 from datalab.analysis import vsm as vsm_an
 from datalab.analysis import xrd as xrd_an
 from datalab.io import load_any
+from datalab.gui import theme
 from datalab.gui.update_worker import UpdateCheckWorker, UpdateDownloadWorker
 from datalab.plot import figures
 
@@ -59,6 +60,8 @@ class MainWindow(QMainWindow):
         self.list.itemSelectionChanged.connect(self._load_line)
         left = QWidget()
         lv = QVBoxLayout(left)
+        lv.setSpacing(10)
+        lv.addWidget(theme.section("시료"))
         lv.addWidget(self.mode)
         lv.addWidget(self.list)
         up, down = QPushButton("▲ 위로"), QPushButton("▼ 아래로")
@@ -66,14 +69,18 @@ class MainWindow(QMainWindow):
         up.clicked.connect(lambda: self.move_selected(-1))
         down.clicked.connect(lambda: self.move_selected(1))
         lv.addWidget(self._row(up, down))
+        theme.card(left)
 
         # 가운데: 그래프(프리셋 크기 그대로 — 화면과 저장이 같다)
         self.plot_box = QWidget()
         self.plot_layout = QVBoxLayout(self.plot_box)
         self.plot_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self.plot_box)
+        scroll_in = QScrollArea()
+        scroll_in.setWidgetResizable(True)
+        scroll_in.setWidget(self.plot_box)
+        scroll = QWidget()
+        QVBoxLayout(scroll).addWidget(scroll_in)
+        theme.card(scroll, 8)
 
         # 오른쪽: 옵션·결과
         self.style = QComboBox()
@@ -123,14 +130,15 @@ class MainWindow(QMainWindow):
         form.addRow(self.bw)
         form.addRow("배치", self.layout_box)
         form.addRow(self.err)
-        form.addRow(QLabel("<b>VSM</b>"))
+        form.addRow(theme.section("VSM"))
         form.addRow(self.inset)
         form.addRow("인셋 H 반폭", self.inset_w)
         form.addRow("H 표시 단위", self.h_unit)
         form.addRow("자장 오프셋 보정(Oe)", self.offset)
-        form.addRow(self._row(self.bg, QLabel("맞춤 |H| ≥"), self.bg_frac))
+        form.addRow(self.bg)
+        form.addRow("배경 맞춤 |H| ≥", self.bg_frac)
         form.addRow("세로축", self._row(self.vsm_y, QLabel("평활화"), self.smooth))
-        form.addRow(QLabel("<b>XRD</b>"))
+        form.addRow(theme.section("XRD"))
         form.addRow(self.norm)
         form.addRow("세로 띄우기(waterfall)", self._row(self.wf, self.wf_mode))
         edit = QFormLayout()
@@ -138,35 +146,54 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget()
         copy = QPushButton("결과 표 복사(Excel 붙여넣기)")
         copy.clicked.connect(self.copy_table)
-        right = QWidget()
-        rv = QVBoxLayout(right)
+        opts = QWidget()
+        ov = QVBoxLayout(opts)
         tabs = QTabWidget()
+        tabs.setObjectName("segTabs")
         for lay, title in ((form, "옵션"), (edit, "그래프 편집")):
             page = QWidget()
             page.setLayout(lay)
-            tabs.addTab(page, title)
-        rv.addWidget(tabs)
-        rv.addWidget(self.table, 1)
-        rv.addWidget(copy)
+            lay.setContentsMargins(2, 12, 16, 4)  # 오른쪽은 세로 스크롤바 자리
+            sc = QScrollArea()  # 옵션이 길어 창이 작으면 잘림 → 스크롤
+            sc.setWidgetResizable(True)
+            sc.setWidget(page)
+            tabs.addTab(sc, title)
+        ov.addWidget(tabs)
+        theme.card(opts)
+        res = QWidget()
+        resv = QVBoxLayout(res)
+        resv.setSpacing(10)
+        resv.addWidget(theme.section("결과"))
+        resv.addWidget(self.table, 1)
+        resv.addWidget(copy)
+        theme.card(res)
+        right = QSplitter(Qt.Orientation.Vertical)
+        right.setHandleWidth(12)
+        right.addWidget(opts)
+        right.addWidget(res)
+        right.setSizes([520, 300])
 
         split = QSplitter()
-        for w, s in ((left, 220), (scroll, 800), (right, 380)):
+        split.setHandleWidth(12)
+        for w in (left, scroll, right):
             split.addWidget(w)
-        split.setSizes([220, 800, 380])
+        split.setSizes([220, 760, 440])
         self.status = QLabel()
         self.statusBar().addWidget(self.status, 1)
         # 맨 위 탭(LCR Logger 와 같은 구성): 그래프 | Origin 해석 메뉴에 해당하는 탭들
         from datalab.gui.tabs import PeakFitTab, ProcessTab, SatFitTab, SheetTab
 
         self.main_tabs = QTabWidget()
-        self.main_tabs.addTab(split, "그래프")
+        self.main_tabs.setObjectName("mainTabs")
         self.process_tab, self.peak_tab = ProcessTab(self), PeakFitTab(self)
         self.sat_tab, self.sheet_tab = SatFitTab(self), SheetTab(self)
-        for tab, title in ((self.process_tab, "데이터 처리"), (self.peak_tab, "피크 피팅"),
+        split.setContentsMargins(16, 12, 16, 8)  # 카드가 창 끝에 붙지 않게(다른 탭은 tabs._layout 에서 같은 여백)
+        for tab, title in ((split, "그래프"), (self.process_tab, "데이터 처리"), (self.peak_tab, "피크 피팅"),
                            (self.sat_tab, "자기 포화 피팅"), (self.sheet_tab, "워크시트")):
             self.main_tabs.addTab(tab, title)
         self.main_tabs.currentChanged.connect(lambda i: getattr(self.main_tabs.widget(i), "refresh", lambda: None)())
         self.setCentralWidget(self.main_tabs)
+        theme.roomy(self)
         self._menus()
         self.redraw()
         self._update_check = self._update_dl = None
