@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QLabel, QPushButton, QSplitter,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from datalab import db
 
@@ -21,6 +21,18 @@ class DbDialog(QDialog):
         self.finished.connect(self.store.close)
         self.setWindowTitle("DB 목록·태깅")
         self.resize(900, 600)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("검색: 이름·조성·공정·로트·메모·태그·파일 이름 (띄어쓰기 = 모두 포함)")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._fill_samples)
+        self.kind = QComboBox()
+        self.kind.addItems(["전체", "VSM", "XRD"])
+        self.kind.currentTextChanged.connect(self._fill_samples)
+        top = QHBoxLayout()
+        top.addWidget(self.search, 1)
+        top.addWidget(QLabel("종류"))
+        top.addWidget(self.kind)
 
         self.samples = QTableWidget(0, len(SAMPLE_COLS))
         self.samples.setHorizontalHeaderLabels([t for _, t in SAMPLE_COLS])
@@ -44,6 +56,7 @@ class DbDialog(QDialog):
         bottom.addWidget(self.info, 1)
         bottom.addWidget(open_btn)
         lay = QVBoxLayout(self)
+        lay.addLayout(top)
         lay.addWidget(split)
         lay.addLayout(bottom)
 
@@ -53,7 +66,8 @@ class DbDialog(QDialog):
 
     def _fill_samples(self):
         self.samples.blockSignals(True)
-        rows = self.store.samples()
+        kind = self.kind.currentText()
+        rows = self.store.samples(self.search.text(), None if kind == "전체" else kind)
         self.samples.setRowCount(len(rows))
         for r, s in enumerate(rows):
             for c, (key, _) in enumerate(SAMPLE_COLS):
@@ -66,6 +80,7 @@ class DbDialog(QDialog):
         self.samples.resizeColumnsToContents()
         if rows:
             self.samples.selectRow(0)
+        self._fill_meas()  # 결과가 없으면 측정 목록도 비움
 
     def _edited(self, it: QTableWidgetItem):
         key = SAMPLE_COLS[it.column()][0]

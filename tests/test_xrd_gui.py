@@ -296,3 +296,39 @@ def test_db_dialog_tag_and_reopen(qtbot, tmp_path, xrd_file):
     with pytest.raises(ValueError):
         s.update_sample(1, "name; DROP TABLE samples", "x")
     s.close()
+
+
+def test_db_search_filter(qtbot, tmp_path, xrd_file):
+    """검색어(단어 모두 포함)·종류로 시료 목록을 거른다."""
+    from datalab import db
+    from datalab.gui.db_dialog import DbDialog
+    from datalab.gui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.db_root = tmp_path / "db"
+    w.open_paths([str(lakeshore(tmp_path, {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5)))])
+    w.list.item(0).setText("리본B")
+    w.save_to_db()
+    w.open_paths([str(xrd_file)])
+    w.list.item(0).setText("합금A")
+    w.save_to_db()
+    s = db.Store(w.db_root)
+    sid = {r["name"]: r["id"] for r in s.samples()}
+    s.update_sample(sid["합금A"], "composition", "Fe78Si9B13")
+    s.update_sample(sid["합금A"], "tags", "열처리")
+    names = lambda *a: [r["name"] for r in s.samples(*a)]
+    assert names() == ["리본B", "합금A"]
+    assert names("fe78 열처리") == ["합금A"]
+    assert names("fe78 없음") == []
+    assert names(xrd_file.name[:4].upper()) == ["합금A"]  # 원본 파일 이름도 찾음
+    assert names("", "VSM") == ["리본B"] and names("", "XRD") == ["합금A"]
+    s.close()
+
+    d = DbDialog(w, w.db_root)
+    qtbot.addWidget(d)
+    d.kind.setCurrentText("XRD")
+    assert d.samples.rowCount() == 1 and d.samples.item(0, 0).text() == "합금A"
+    d.search.setText("없는말")
+    assert d.samples.rowCount() == 0 and d.meas.rowCount() == 0
+    d.reject()

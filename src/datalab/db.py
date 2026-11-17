@@ -95,14 +95,28 @@ class Store:
         return (self.con.execute("SELECT COUNT(*) FROM samples").fetchone()[0],
                 self.con.execute("SELECT COUNT(*) FROM measurements").fetchone()[0])
 
-    def samples(self) -> list[dict]:
-        """시료 목록(이름순): id·name·composition·process·lot·memo·tags(쉼표로 이음)·n(측정 수)."""
+    def samples(self, text: str = "", kind: str | None = None) -> list[dict]:
+        """시료 목록(이름순): id·name·composition·process·lot·memo·tags(쉼표로 이음)·n(측정 수).
+
+        text: 띄어쓰기로 나눈 단어가 모두 이름·조성·공정·로트·메모·태그·원본 파일 이름 어딘가에 든 시료만(대소문자 무시).
+        kind: 'VSM'·'XRD'면 그 종류 측정이 있는 시료만.
+        """
         rows = self.con.execute(
             "SELECT s.id, s.name, s.composition, s.process, s.lot, s.memo,"
             " (SELECT GROUP_CONCAT(tag, ', ') FROM (SELECT tag FROM tags WHERE sample_id = s.id ORDER BY tag)),"
-            " (SELECT COUNT(*) FROM measurements WHERE sample_id = s.id) FROM samples s ORDER BY s.name").fetchall()
+            " (SELECT COUNT(*) FROM measurements WHERE sample_id = s.id),"
+            " (SELECT GROUP_CONCAT(file_name, ' ') FROM measurements WHERE sample_id = s.id)"
+            " FROM samples s WHERE ? IS NULL OR EXISTS"
+            " (SELECT 1 FROM measurements WHERE sample_id = s.id AND kind = ?) ORDER BY s.name",
+            (kind, kind)).fetchall()
         keys = ("id", "name", "composition", "process", "lot", "memo", "tags", "n")
-        return [dict(zip(keys, r)) for r in rows]
+        words = text.casefold().split()
+        out = []
+        for r in rows:
+            hay = " ".join(str(v) for v in (*r[1:7], r[8]) if v).casefold()
+            if all(w in hay for w in words):
+                out.append(dict(zip(keys, r)))
+        return out
 
     SAMPLE_FIELDS = ("composition", "process", "lot", "memo")
 
