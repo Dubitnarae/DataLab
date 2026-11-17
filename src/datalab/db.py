@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import shutil
 import sqlite3
 from datetime import datetime
@@ -43,6 +44,18 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _copy_verified(src: Path, dest: Path, digest: str):
+    """dest가 없으면 src를 복사하고 SHA256을 대조한다. 다르면 지우고 OSError."""
+    if dest.exists():
+        return
+    tmp = dest.with_suffix(dest.suffix + ".part")  # 복사 도중 끊겨도 반쪽 파일이 원본 행세를 하지 않게
+    shutil.copyfile(src, tmp)
+    if sha256(tmp) != digest:  # 이 PC는 큰 파일 비트 깨짐 이력이 있음
+        tmp.unlink()
+        raise OSError(f"복사본이 원본과 다릅니다: {src.name}")
+    tmp.replace(dest)
+
+
 class Store:
     def __init__(self, root: str | Path = DATA_DIR):
         self.root = Path(root)
@@ -63,14 +76,7 @@ class Store:
         """
         path = Path(path)
         digest = sha256(path)
-        dest = self.root / "originals" / f"{digest}{path.suffix.lower()}"
-        if not dest.exists():
-            tmp = dest.with_suffix(dest.suffix + ".part")  # 복사 도중 끊겨도 반쪽 파일이 원본 행세를 하지 않게
-            shutil.copyfile(path, tmp)
-            if sha256(tmp) != digest:  # 이 PC는 큰 파일 비트 깨짐 이력이 있음
-                tmp.unlink()
-                raise OSError(f"원본 복사본이 원본과 다릅니다: {path.name}")
-            tmp.replace(dest)
+        _copy_verified(path, self.root / "originals" / f"{digest}{path.suffix.lower()}", digest)
         with self.con:
             self.con.execute("INSERT OR IGNORE INTO samples (name, created_at) VALUES (?, ?)", (sample, _now()))
             sid = self.con.execute("SELECT id FROM samples WHERE name = ?", (sample,)).fetchone()[0]
@@ -167,6 +173,79 @@ class Store:
         heads = ["시료", "조성", "공정", "로트", "태그", "종류", "원본 파일", "측정일", "해석 버전", *cols]
         rows = [[*m[1:], ver.get(m[0]), *(vals.get(m[0], {}).get(h) for h in cols)] for m in meas]
         return heads, rows
+
+    def backup(self, dest: str | Path) -> Path:
+        """dest 안 DataLab_Backup 폴더에 날짜별 DB 사본 + originals(없는 것만, SHA 대조). 돌려줌: DB 사본 경로.
+
+        DB는 로컬에서 SQLite 백업 API로 떠서 복사한다(WebDAV 위에서 SQLite를 직접 쓰지 않음).
+        """
+        out = Path(dest) / "DataLab_Backup"
+        (out / "originals").mkdir(parents=True, exist_ok=True)
+        for f in (self.root / "originals").iterdir():
+            if f.suffix != ".part":
+                _copy_verified(f, out / "originals" / f.name, f.stem)
+        tmp = self.root / "backup.tmp.sqlite"
+        tmp.unlink(missing_ok=True)
+        snap = sqlite3.connect(tmp)
+        self.con.backup(snap)
+        snap.close()
+        target = out / f"datalab_{platform.node()}_{datetime.now():%Y%m%d_%H%M%S}.sqlite"
+        target.unlink(missing_ok=True)  # 같은 PC에서 같은 초에 또 떴으면 새 사본으로
+        try:
+            _copy_verified(tmp, target, sha256(tmp))
+        finally:
+            tmp.unlink()
+        return target
+
+    def merge(self, src: str | Path) -> dict[str, int]:
+        """다른 PC의 DB(백업 사본)를 합친다. 원본은 src 옆 originals 폴더에서 가져온다.
+
+        측정은 원본 SHA256 기준 — 이미 있으면 건너뜀(이 PC 값 유지). 시료는 이름 기준, 이 PC에서 빈 칸만 채우고
+        태그는 합집합. 원본이 하나라도 없으면 DB는 그대로 두고 OSError.
+        돌려줌: {'samples': 새 시료, 'measurements': 새 측정, 'skipped': 이미 있던 측정}.
+        """
+        src = Path(src)
+        tmp = self.root / "merge.tmp.sqlite"  # 네트워크 드라이브의 SQLite를 직접 열지 않고 로컬 사본으로 읽음
+        shutil.copyfile(src, tmp)
+        try:
+            o = sqlite3.connect(tmp)
+            try:
+                samples = o.execute("SELECT id, name, composition, process, lot, memo, created_at FROM samples").fetchall()
+                tags = o.execute("SELECT sample_id, tag FROM tags").fetchall()
+                meas = o.execute("SELECT id, sample_id, kind, file_sha256, file_name, measured_at, instrument,"
+                                 " raw_meta_json, created_at FROM measurements").fetchall()
+                results = o.execute("SELECT measurement_id, key, value, unit, analysis_version FROM results").fetchall()
+            finally:
+                o.close()
+        finally:
+            tmp.unlink()
+        have = {r[0] for r in self.con.execute("SELECT file_sha256 FROM measurements")}
+        new = [m for m in meas if m[3] not in have]
+        for m in new:  # 원본부터 — 없으면 DB를 건드리기 전에 멈춤
+            name = f"{m[3]}{Path(m[4]).suffix.lower()}"
+            if not (src.parent / "originals" / name).exists() and not (self.root / "originals" / name).exists():
+                raise OSError(f"백업에 원본 사본이 없습니다: {m[4]} ({name})")
+            _copy_verified(src.parent / "originals" / name, self.root / "originals" / name, m[3])
+        name_of = {sid: n for sid, n, *_ in samples}
+        n_before = self.counts()[0]
+        with self.con:
+            for _, name, *fields, created in samples:
+                self.con.execute("INSERT OR IGNORE INTO samples (name, created_at) VALUES (?, ?)", (name, created))
+                for f, v in zip(self.SAMPLE_FIELDS, fields):  # 열 이름은 허용 목록에서만
+                    self.con.execute(f"UPDATE samples SET {f} = COALESCE({f}, ?) WHERE name = ?", (v, name))
+            self.con.executemany("INSERT OR IGNORE INTO tags (sample_id, tag) SELECT id, ? FROM samples WHERE name = ?",
+                                 [(t, name_of[sid]) for sid, t in tags])
+            res_of: dict[int, list] = {}
+            for mid, *r in results:
+                res_of.setdefault(mid, []).append(r)
+            for oid, osid, *rest in new:
+                sid = self.con.execute("SELECT id FROM samples WHERE name = ?", (name_of[osid],)).fetchone()[0]
+                mid = self.con.execute(
+                    "INSERT INTO measurements (sample_id, kind, file_sha256, file_name, measured_at, instrument,"
+                    " raw_meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (sid, *rest)).lastrowid
+                self.con.executemany("INSERT INTO results (measurement_id, key, value, unit, analysis_version)"
+                                     " VALUES (?, ?, ?, ?, ?)", [(mid, *r) for r in res_of.get(oid, [])])
+        return {"samples": self.counts()[0] - n_before, "measurements": len(new), "skipped": len(meas) - len(new)}
 
 
 def write_xlsx(path: str | Path, heads: list[str], rows: list[list]):

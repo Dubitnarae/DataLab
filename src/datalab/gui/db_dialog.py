@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
@@ -57,6 +59,14 @@ class DbDialog(QDialog):
         self.info = QLabel("칸을 더블클릭해 고치면 바로 저장됩니다. 측정을 고르지 않고 열면 그 시료 측정 전부를 엽니다.")
         bottom = QHBoxLayout()
         bottom.addWidget(self.info, 1)
+        bak_btn = QPushButton("NAS로 백업...")
+        bak_btn.setToolTip("고른 폴더의 DataLab_Backup 에 날짜별 DB 사본과 원본(없는 것만)을 저장")
+        bak_btn.clicked.connect(lambda: self.backup())
+        mrg_btn = QPushButton("백업 가져오기(병합)...")
+        mrg_btn.setToolTip("다른 PC 백업의 datalab_*.sqlite 를 골라 합침 — 같은 원본 파일은 한 번만")
+        mrg_btn.clicked.connect(lambda: self.merge())
+        bottom.addWidget(bak_btn)
+        bottom.addWidget(mrg_btn)
         bottom.addWidget(cmp_btn)
         bottom.addWidget(open_btn)
         lay = QVBoxLayout(self)
@@ -121,6 +131,35 @@ class DbDialog(QDialog):
         self._cmp = CompareDialog(self, heads, rows)
         self._cmp.show()
         return self._cmp
+
+    # shortcut: 백업 폴더를 기억하지 않음(매번 고름), 자주 쓰면 %APPDATA%\datalab 설정에 저장
+    def backup(self, folder: str | None = None) -> bool:
+        if folder is None:
+            folder = QFileDialog.getExistingDirectory(self, "백업할 폴더(NAS) 고르기")
+            if not folder:
+                return False
+        try:
+            path = self.store.backup(folder)
+        except OSError as e:
+            QMessageBox.warning(self, "백업 실패", str(e))
+            return False
+        self.info.setText(f"백업함: {path}")
+        return True
+
+    def merge(self, path: str | None = None) -> dict | None:
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "합칠 백업 DB 고르기", "", "DataLab DB (*.sqlite)")
+            if not path:
+                return None
+        try:
+            r = self.store.merge(path)
+        except (OSError, sqlite3.Error) as e:
+            QMessageBox.warning(self, "병합 실패", f"{e}\n\n이 PC의 DB는 바뀌지 않았습니다.")
+            return None
+        self._fill_samples()
+        self.info.setText(f"병합: 새 시료 {r['samples']}개 · 새 측정 {r['measurements']}개 · "
+                          f"이미 있던 측정 {r['skipped']}개 건너뜀")
+        return r
 
 
 class CompareDialog(QDialog):
