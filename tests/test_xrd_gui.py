@@ -239,3 +239,27 @@ def test_vsm_background_and_dmdh(qtbot, tmp_path):
     ax = w.fig.axes[0]
     assert ax.get_ylabel() == "dM/dH (emu/g/Oe)" and len(w.fig.axes) == 1  # 인셋 없음
     assert w.template()["vsm_y"] == "dM/dH" and "bg" not in w.template()
+
+
+def test_db_save_dedup(qtbot, tmp_path, xrd_file):
+    """같은 원본을 두 번 저장해도 측정은 하나, 원본 사본도 하나."""
+    import sqlite3
+
+    from datalab.gui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.db_root = tmp_path / "db"
+    w.open_paths([str(lakeshore(tmp_path, {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5)))])
+    assert w.save_to_db() == (1, 0)
+    assert w.save_to_db() == (0, 1)
+    w.open_paths([str(xrd_file)])
+    assert w.save_to_db() == (1, 0)
+    con = sqlite3.connect(w.db_root / "datalab.sqlite")
+    assert con.execute("SELECT COUNT(*) FROM measurements").fetchone()[0] == 2
+    hc = con.execute("SELECT value, unit, analysis_version FROM results WHERE key = 'Hc'").fetchone()
+    assert hc[0] == pytest.approx(2.5) and hc[1:] == ("Oe", "vsm-1")
+    assert con.execute("SELECT COUNT(*) FROM results r JOIN measurements m ON m.id = r.measurement_id"
+                       " WHERE m.kind = 'XRD' AND r.key = '판정'").fetchone()[0] == 1
+    con.close()
+    assert len(list((w.db_root / "originals").iterdir())) == 2

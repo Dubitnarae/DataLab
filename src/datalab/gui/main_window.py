@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
                                QScrollArea, QSplitter, QTableWidget, QTabWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from datalab import __author__, __version__
+from datalab import db
 from datalab.analysis import vsm as vsm_an
 from datalab.analysis import xrd as xrd_an
 from datalab.io import load_any
@@ -354,6 +355,7 @@ class MainWindow(QMainWindow):
                               ("그림 클립보드 복사(PPT 붙여넣기)", "Ctrl+Shift+C", self.copy_figure),
                               ("그래프 템플릿 저장...", "Ctrl+Shift+T", self.save_template),
                               ("그래프 템플릿 불러오기...", "Ctrl+T", self.load_template),
+                              ("체크한 시료 DB에 저장", "Ctrl+D", self.save_to_db),
                               ("선택 시료 지우기", QKeySequence.StandardKey.Delete, self.remove_selected)):
             a = QAction(text, self)
             a.setShortcut(key)
@@ -402,6 +404,42 @@ class MainWindow(QMainWindow):
             self.mode.setCurrentText(kind)  # _fill_list 호출
         else:
             self._fill_list()
+
+    def save_to_db(self) -> tuple[int, int]:
+        """체크한 시료의 원본·해석 결과를 DB에 기록한다. VSM 결과는 보정(오프셋·배경) 전 원본 값. 돌려줌: (새로, 갱신)."""
+        sel = self.checked()
+        if not sel:
+            self.status.setText("DB에 저장할 시료를 체크하세요")
+            return 0, 0
+        store = db.Store(getattr(self, "db_root", db.DATA_DIR))
+        new = upd = 0
+        try:
+            for it in sel:
+                d = it["data"]
+                if it["kind"] == "VSM":
+                    r = vsm_an.analyze_loop(d.h, d.m)
+                    hu, mu = d.h_unit, d.m_unit
+                    units = {"Hc": hu, "Hc_half": hu, "H_bias": hu, "Mr": mu, "Ms": mu, "SQ": "", "H_max": hu}
+                    res = {k: (r[k], u) for k, u in units.items()}
+                    args = (d.path, "VSM", it["name"], res, vsm_an.ANALYSIS_VERSION, None,
+                            d.file_format, {**d.meta, "device": d.device})
+                else:
+                    import xrdcheck
+                    res = {k: (v, "") for k, v in xrd_an.summary(it["xrd_result"]).items()}  # 단위는 열 이름 안에
+                    md = d.measurement_date
+                    args = (d.source_path, "XRD", it["name"], res, f"xrdcheck-{xrdcheck.__version__}",
+                            md.isoformat() if md else None, None, None)
+                _, is_new = store.add_measurement(*args)
+                new += is_new
+                upd += not is_new
+            n_s, n_m = store.counts()
+        except OSError as e:
+            QMessageBox.warning(self, "DB 저장 실패", str(e))
+            return new, upd
+        finally:
+            store.close()
+        self.status.setText(f"DB 저장: 새로 {new}개, 결과 갱신 {upd}개 (전체 시료 {n_s}개·측정 {n_m}개)")
+        return new, upd
 
     def remove_selected(self):
         gone = {i.data(Qt.ItemDataRole.UserRole) for i in self.list.selectedItems()}
