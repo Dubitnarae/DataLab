@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datalab"
-version = "0.0.2"
+version = "0.0.3"
 description = "R&D 데이터 해석·그래프 — VSM·XRD 해석, 논문·PPT용 그래프"
 authors = [{ name = "KIM YEONGDO" }]
 requires-python = ">=3.12"

@@ -89,3 +89,37 @@ def test_edit_panel(qtbot, tmp_path):
     save(w.fig, tmp_path / "e.png")
     w.mode.setCurrentText("XRD")  # 종류를 바꾸면 축 설정을 비움
     assert x["min"].text() == "" and not y["log"].isChecked()
+
+
+def test_panels_double_y(qtbot, tmp_path):
+    """M4 ② 2·4 패널(시료 차례대로·지정 패널)과 Double-Y(오른쪽 Y축, 범례 하나로)."""
+    from datalab.gui.main_window import MainWindow
+    from datalab.plot.figures import save
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    for i in range(3):
+        (tmp_path / f"d{i}").mkdir()
+        w.open_paths([str(lakeshore(tmp_path / f"d{i}", {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5 + i)))])
+    w.layout_box.setCurrentText("4패널(2×2)")
+    panels = [a for a in w.fig.axes if a.get_xlabel()]
+    assert len(panels) == 4 and [len(a.get_lines()) - 2 for a in panels] == [1, 1, 1, 0]  # -2: 원점 가로·세로 선
+    w.ax_w["x"]["min"].setText("-50")
+    w.redraw()
+    assert all(a.get_xlim()[0] == -50 for a in w.fig.axes if a.get_xlabel())  # 편집 값은 모든 패널에
+    w.layout_box.setCurrentText("세로 2패널")
+    w.list.item(2).setSelected(True)
+    w.panel.setCurrentIndex(1)  # 3번째 시료(차례대로면 패널 1) → 패널 1 지정
+    w.right.setChecked(True)
+    w.y2title.setText("M2")
+    w.redraw()
+    top = w.fig.axes[0]
+    twin = [a for a in w.fig.axes if a.get_ylabel() == "M2"]
+    assert len(twin) == 1 and len(twin[0].get_lines()) == 1
+    assert twin[0].get_lines()[0].get_color() != top.get_lines()[0].get_color()  # 오른쪽 축도 색 이어서
+    assert len(twin[0].get_legend().get_texts()) == 2 and top.get_legend() is None  # 범례 하나로 합침
+    w.legend.setCurrentText("숨김")
+    assert not any(a.get_legend() for a in w.fig.axes)
+    save(w.fig, tmp_path / "p.png")
+    w.mode.setCurrentText("XRD")  # XRD 빈 목록도 패널로 그려짐
+    assert len(w.fig.axes) == 2

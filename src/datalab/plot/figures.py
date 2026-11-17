@@ -50,17 +50,56 @@ LEGEND_LOC = {"자동": None, "숨김": None, "가장 빈 곳": "best", "오른�
 MARKERS = {"없음": "", "○": "o", "□": "s", "△": "^", "◇": "D", "×": "x", "+": "+"}
 
 
-def _plot(ax, name, x, y, kw: dict):
-    """kw: 편집 패널의 선 모양(color·lw·marker). 빈 값은 프리셋 기본."""
-    kw = {k: v for k, v in kw.items() if v}
+LAYOUTS = {"한 그래프": (1, 1), "세로 2패널": (2, 1), "가로 2패널": (1, 2), "4패널(2×2)": (2, 2)}
+_NOT_PLOT = ("panel", "right")  # 시료 style 중 선 모양이 아닌 배치 값
+
+
+def _panels(fig: Figure, items: list, layout: str) -> tuple[list, list]:
+    """(패널 축 목록, 시료별 그릴 축). style의 panel(1부터, 0=차례대로 돌려 배치), right=그 패널 오른쪽 Y축(Double-Y)."""
+    r, c = LAYOUTS[layout]
+    panels = list(np.ravel(fig.subplots(r, c, squeeze=False)))
+    twins, axs = {}, []
+    for k, (*_, kw) in enumerate(items):
+        p = min(kw.get("panel") or k % len(panels) + 1, len(panels)) - 1
+        ax = panels[p]
+        if kw.get("right"):
+            if p not in twins:
+                twins[p] = ax.twinx()
+            ax = twins[p]
+        axs.append(ax)
+    return panels, axs
+
+
+def _siblings(ax) -> list:
+    """패널 축과 그 오른쪽 Y축(twinx는 X를 공유)."""
+    return [a for a in ax.figure.axes if a is ax or ax.get_shared_x_axes().joined(ax, a)]
+
+
+def _legend(ax, min_n: int = 1, **kw) -> None:
+    """왼쪽·오른쪽 Y축 선을 범례 하나로. 맨 위 축에 둬야 오른쪽 선에 가리지 않는다."""
+    sibs = _siblings(ax)
+    for a in sibs:
+        if a.get_legend():
+            a.get_legend().remove()
+    h, lab = [], []
+    for a in sibs:
+        hh, ll = a.get_legend_handles_labels()
+        h, lab = h + hh, lab + ll
+    if len(h) >= min_n:
+        sibs[-1].legend(h, lab, **kw)
+
+
+def _plot(ax, name, x, y, kw: dict, k: int):
+    """kw: 편집 패널의 선 모양(color·lw·marker). 빈 값은 프리셋 기본, 색은 시료 순서(C0, C1…)로 고정 — 오른쪽 Y축도 같은 순서."""
+    kw = {"color": f"C{k % 10}", **{a: v for a, v in kw.items() if v and a not in _NOT_PLOT}}
     if kw.get("marker"):
         # shortcut: 기호를 약 40개만 찍음(수천 점 루프가 굵은 띠가 되지 않게), 간격 지정 요청 오면 옵션으로
         kw.update(markevery=max(1, len(x) // 40), markerfacecolor="none")
-    ax.plot(x, y, label=name, **kw)
+    return ax.plot(x, y, label=name, **kw)[0]
 
 
 def apply_axes(ax, o: dict) -> None:
-    """편집 패널 값: {x,y}{min,max,step,log,title}, legend. None·0·빈 문자열은 자동(프리셋 그대로)."""
+    """패널 하나에 편집 패널 값 적용: {x,y}{min,max,step,log,title}, y2title, legend. None·0·빈 문자열은 자동."""
     from matplotlib.ticker import MultipleLocator
 
     for a in "xy":
@@ -73,35 +112,45 @@ def apply_axes(ax, o: dict) -> None:
             getattr(ax, f"{a}axis").set_major_locator(MultipleLocator(o[f"{a}step"]))
         if o.get(f"{a}title"):
             getattr(ax, f"set_{a}label")(o[f"{a}title"])  # $...$ 안은 mathtext(위첨자·그리스 문자)
+    if o.get("y2title"):
+        for t in _siblings(ax)[1:]:
+            t.set_ylabel(o["y2title"])
     leg = o.get("legend") or "자동"
     if leg == "숨김":
-        if ax.get_legend():
-            ax.get_legend().remove()
+        _legend(ax, min_n=10**9)
     elif leg == "그래프 밖 오른쪽":
-        ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+        _legend(ax, loc="upper left", bbox_to_anchor=(1.02, 1))
     elif leg != "자동":
-        ax.legend(loc=LEGEND_LOC[leg])
+        _legend(ax, loc=LEGEND_LOC[leg])
+
+
+def _labels(panels, xlabel, ylabel):
+    for p in panels:
+        p.set_xlabel(xlabel)
+        for a in _siblings(p):
+            a.set_ylabel(ylabel)
+        _legend(p, min_n=2)
 
 
 def draw_vsm(fig: Figure, items: list[tuple[str, np.ndarray, np.ndarray, dict]], h_label: str, m_label: str,
-             inset: bool = True, inset_half_width: float | None = None) -> None:
-    """items: (표시명, H, M, 선 모양). inset이면 원점 부근 확대(연자성 루프는 전체에서 Hc가 안 보임)."""
-    ax = fig.add_subplot()
-    for name, h, m, kw in items:
-        _plot(ax, name, h, m, kw)
-    ax.axhline(0, color="0.6", lw=0.5, zorder=0)
-    ax.axvline(0, color="0.6", lw=0.5, zorder=0)
-    ax.set_xlabel(h_label)
-    ax.set_ylabel(m_label)
-    if len(items) > 1:
-        ax.legend()
-    if inset and items:
-        hmax = max(float(np.abs(h).max()) for _, h, _, _ in items)
-        w = inset_half_width or hmax * 0.02
-        ins = ax.inset_axes([0.58, 0.08, 0.38, 0.38])
-        for line, (_, h, m, _) in zip(ax.get_lines(), items):
-            ins.plot(h, m, color=line.get_color(), lw=line.get_linewidth() * 0.8)
-        near = np.concatenate([m[np.abs(h) <= w] for _, h, m, _ in items]) if items else np.array([])
+             inset: bool = True, inset_half_width: float | None = None, layout: str = "한 그래프") -> list:
+    """items: (표시명, H, M, 선 모양). inset이면 패널마다 원점 부근 확대(연자성 루프는 전체에서 Hc가 안 보임).
+    돌려주는 값: 패널 축 목록(편집 값 적용용)."""
+    panels, axs = _panels(fig, items, layout)
+    lines = [_plot(ax, name, h, m, kw, k) for k, ((name, h, m, kw), ax) in enumerate(zip(items, axs))]
+    _labels(panels, h_label, m_label)
+    hmax = max((float(np.abs(h).max()) for _, h, _, _ in items), default=1.0)
+    w = inset_half_width or hmax * 0.02
+    for p in panels:
+        p.axhline(0, color="0.6", lw=0.5, zorder=0)
+        p.axvline(0, color="0.6", lw=0.5, zorder=0)
+        mine = [(it, ln) for it, ax, ln in zip(items, axs, lines) if ax is p]  # 오른쪽 Y축 시료는 눈금이 달라 인셋에서 뺌
+        if not (inset and mine):
+            continue
+        ins = p.inset_axes([0.58, 0.08, 0.38, 0.38])
+        for (_, h, m, _), ln in mine:
+            ins.plot(h, m, color=ln.get_color(), lw=ln.get_linewidth() * 0.8)
+        near = np.concatenate([m[np.abs(h) <= w] for (_, h, m, _), _ in mine])
         ins.set_xlim(-w, w)
         if near.size:
             mm = float(np.abs(near).max()) * 1.1 or 1.0
@@ -109,21 +158,24 @@ def draw_vsm(fig: Figure, items: list[tuple[str, np.ndarray, np.ndarray, dict]],
         ins.axhline(0, color="0.6", lw=0.4)
         ins.axvline(0, color="0.6", lw=0.4)
         ins.tick_params(labelsize="x-small")
+        ins.locator_params(nbins=4)  # 패널이 작아지면 인셋 눈금 글자가 겹침
+    return panels
 
 
 def draw_xrd(fig: Figure, items: list[tuple[str, np.ndarray, np.ndarray, dict]], offset: float = 0.0,
-             normalize: bool = True) -> None:
-    """items: (표시명, 2θ, counts, 선 모양). offset>0이면 세로로 띄워 그린다(waterfall, 정규화 높이 기준)."""
-    ax = fig.add_subplot()
-    for k, (name, x, y, kw) in enumerate(items):
+             normalize: bool = True, layout: str = "한 그래프") -> list:
+    """items: (표시명, 2θ, counts, 선 모양). offset>0이면 같은 축 안에서 세로로 띄워 그린다(waterfall, 정규화 높이 기준)."""
+    panels, axs = _panels(fig, items, layout)
+    nth: dict = {}
+    for k, ((name, x, y, kw), ax) in enumerate(zip(items, axs)):
         y = y / y.max() if normalize and y.max() > 0 else y
-        _plot(ax, name, x, y + k * offset * (1 if normalize else float(y.max())), kw)
-    ax.set_xlabel("2θ (°)")
-    ax.set_ylabel("Intensity (a.u.)" if normalize else "Intensity (counts)")
+        i = nth[ax] = nth.get(ax, -1) + 1
+        _plot(ax, name, x, y + i * offset * (1 if normalize else float(y.max())), kw, k)
+    _labels(panels, "2θ (°)", "Intensity (a.u.)" if normalize else "Intensity (counts)")
     if normalize:
-        ax.set_yticklabels([])
-    if len(items) > 1:
-        ax.legend()
+        for a in fig.axes:
+            a.set_yticklabels([])
+    return panels
 
 
 def save(fig: Figure, path: str | Path) -> Path:

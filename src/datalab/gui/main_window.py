@@ -66,6 +66,9 @@ class MainWindow(QMainWindow):
         # 오른쪽: 옵션·결과
         self.style = QComboBox()
         self.style.addItems(list(figures.STYLES))
+        self.layout_box = QComboBox()
+        self.layout_box.addItems(list(figures.LAYOUTS))
+        self.layout_box.setToolTip("패널이 여럿이면 체크한 시료를 차례대로 나눠 그림. 그래프 편집 탭에서 시료별 패널을 정할 수 있습니다.")
         self.inset = QCheckBox("원점 확대 인셋")
         self.inset.setChecked(True)
         self.inset_w = self._spin(0, 1e6, 0, "자동", 1)
@@ -75,7 +78,7 @@ class MainWindow(QMainWindow):
         self.wf = self._spin(0, 5, 0, "", 0.1)
         self.norm = QCheckBox("최댓값 1로 정규화")
         self.norm.setChecked(True)
-        for w in (self.style, self.h_unit):
+        for w in (self.style, self.h_unit, self.layout_box):
             w.currentTextChanged.connect(lambda _: self.redraw())
         for w in (self.inset, self.norm):
             w.toggled.connect(lambda _: self.redraw())
@@ -83,6 +86,7 @@ class MainWindow(QMainWindow):
             w.valueChanged.connect(lambda _: self.redraw())
         form = QFormLayout()
         form.addRow("스타일", self.style)
+        form.addRow("배치", self.layout_box)
         form.addRow(QLabel("<b>VSM</b>"))
         form.addRow(self.inset)
         form.addRow("인셋 H 반폭", self.inset_w)
@@ -137,6 +141,10 @@ class MainWindow(QMainWindow):
             form.addRow(f"{a.upper()} 눈금 간격", self._row(w["step"], w["log"]))
             form.addRow(f"{a.upper()} 축 제목", w["title"])
             self.ax_w[a] = w
+        self.y2title = QLineEdit()
+        self.y2title.setPlaceholderText("기본(왼쪽과 같음)")
+        self.y2title.editingFinished.connect(self.redraw)
+        form.addRow("오른쪽 Y 축 제목", self.y2title)
         self.legend = QComboBox()
         self.legend.addItems(list(figures.LEGEND_LOC))
         self.legend.currentTextChanged.connect(lambda _: self.redraw())
@@ -152,6 +160,13 @@ class MainWindow(QMainWindow):
         reset = QPushButton("기본")
         reset.clicked.connect(lambda: self._set_line(color=None, lw=0, marker="", reload=True))
         form.addRow("선택 시료 선", self._row(self.color_btn, self.lw, self.marker, reset))
+        self.panel = QComboBox()
+        self.panel.addItems(["패널 자동", "패널 1", "패널 2", "패널 3", "패널 4"])
+        self.panel.currentIndexChanged.connect(lambda i: self._set_line(panel=i))
+        self.right = QCheckBox("오른쪽 Y축")
+        self.right.setToolTip("Double-Y: 눈금이 다른 시료를 같은 패널 오른쪽 축에 그림")
+        self.right.toggled.connect(lambda v: self._set_line(right=v))
+        form.addRow("선택 시료 위치", self._row(self.panel, self.right))
 
     @staticmethod
     def _row(*widgets) -> QWidget:
@@ -163,7 +178,7 @@ class MainWindow(QMainWindow):
         return box
 
     def _axes_opts(self) -> dict:
-        o = {"legend": self.legend.currentText()}
+        o = {"legend": self.legend.currentText(), "y2title": self.y2title.text()}
         for a, w in self.ax_w.items():
             for k in ("min", "max"):
                 try:
@@ -183,6 +198,7 @@ class MainWindow(QMainWindow):
             w["log"].setChecked(False)
             for k in ("step", "log"):
                 w[k].blockSignals(False)
+        self.y2title.clear()
         self.legend.blockSignals(True)
         self.legend.setCurrentText("자동")
         self.legend.blockSignals(False)
@@ -198,11 +214,14 @@ class MainWindow(QMainWindow):
     def _load_line(self):
         sel = self._selected_items()
         st = sel[0].get("style", {}) if sel else {}
-        for w in (self.lw, self.marker):
+        widgets = (self.lw, self.marker, self.panel, self.right)
+        for w in widgets:
             w.blockSignals(True)
         self.lw.setValue(st.get("lw") or 0)
         self.marker.setCurrentText(next(k for k, v in figures.MARKERS.items() if v == (st.get("marker") or "")))
-        for w in (self.lw, self.marker):
+        self.panel.setCurrentIndex(st.get("panel") or 0)
+        self.right.setChecked(bool(st.get("right")))
+        for w in widgets:
             w.blockSignals(False)
         self.color_btn.setStyleSheet(f"background:{st['color']}" if st.get("color") else "")
 
@@ -319,13 +338,15 @@ class MainWindow(QMainWindow):
         self.fig = figures.new_figure(self.style.currentText())
         sel = self.checked()
         if self.mode.currentText() == "VSM":
-            rows = self._draw_vsm(sel)
+            rows, panels = self._draw_vsm(sel)
         else:
-            figures.draw_xrd(self.fig, [(it["name"], it["data"].two_theta, it["data"].counts, it.get("style", {}))
-                                        for it in sel],
-                             self.wf.value(), self.norm.isChecked())
+            panels = figures.draw_xrd(self.fig, [(it["name"], it["data"].two_theta, it["data"].counts,
+                                                  it.get("style", {})) for it in sel],
+                                      self.wf.value(), self.norm.isChecked(), self.layout_box.currentText())
             rows = [xrd_an.summary(it["xrd_result"]) for it in sel]
-        figures.apply_axes(self.fig.axes[0], self._axes_opts())
+        o = self._axes_opts()
+        for ax in panels:
+            figures.apply_axes(ax, o)
         self._show_table(sel, rows)
         while self.plot_layout.count():
             w = self.plot_layout.takeAt(0).widget()
@@ -339,7 +360,7 @@ class MainWindow(QMainWindow):
         try:
             canvas.draw()
         except ValueError as e:  # 축 제목 $...$ 수식 오류 — 글자 그대로 보이게 바꿔 다시 그림
-            for lab in (self.fig.axes[0].xaxis.label, self.fig.axes[0].yaxis.label):
+            for lab in (lb for a in self.fig.axes for lb in (a.xaxis.label, a.yaxis.label)):
                 lab.set_text(lab.get_text().replace("$", r"\$"))
             canvas.draw()
             self.status.setText("축 제목 수식 오류: " + str(e).splitlines()[0])
@@ -367,9 +388,10 @@ class MainWindow(QMainWindow):
             rows.append(row)
         u = sel[0]["data"] if sel else None
         h_label = "H (kA/m)" if ka and (u is None or u.h_unit == "Oe") else f"H ({u.h_unit if u else 'Oe'})"
-        figures.draw_vsm(self.fig, data, h_label, f"M ({u.m_unit if u else 'emu/g'})", self.inset.isChecked(),
-                         self.inset_w.value() * (k if u and u.h_unit == "Oe" else 1) or None)
-        return rows
+        panels = figures.draw_vsm(self.fig, data, h_label, f"M ({u.m_unit if u else 'emu/g'})", self.inset.isChecked(),
+                                  self.inset_w.value() * (k if u and u.h_unit == "Oe" else 1) or None,
+                                  self.layout_box.currentText())
+        return rows, panels
 
     def _show_table(self, sel: list[dict], rows: list[dict]):
         keys = list(dict.fromkeys(k for r in rows for k in r))
