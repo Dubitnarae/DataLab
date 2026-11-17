@@ -193,3 +193,31 @@ def test_bw_and_font(qtbot, tmp_path):
     w.font.setCurrentText("Arial")
     w.apply_template(t)
     assert w.bw.isChecked() and w.font.currentText() == "Times New Roman"
+
+
+def test_batch_export(qtbot, tmp_path):
+    """M4 ⑤ 일괄 내보내기: 체크한 시료마다 한 장, 같은 스타일, 못 쓰는 글자·같은 이름 처리, 화면 그래프는 그대로."""
+    from datalab.gui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    for i in range(3):
+        (tmp_path / f"d{i}").mkdir()
+        w.open_paths([str(lakeshore(tmp_path / f"d{i}", {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5 + i)))])
+    w.list.item(0).setText("A/B")
+    w.list.item(1).setText("A_B")  # 정리하면 첫째와 같은 이름
+    w.list.item(2).setCheckState(w.list.item(2).checkState().Unchecked)
+    w.layout_box.setCurrentText("세로 2패널")
+    w.list.item(0).setSelected(True)
+    w.right.setChecked(True)  # 한 장짜리에서는 빠져야 함
+    w.ax_w["x"]["min"].setText("-30")
+    w.redraw()
+    screen = w.fig
+    out = tmp_path / "out"
+    out.mkdir()
+    paths = w.batch_export(out, ".png")
+    assert [p.name for p in paths] == ["A_B.png", "A_B_2.png"]
+    assert all(p.stat().st_size > 1000 for p in paths)
+    assert w.fig is screen  # 화면 그래프는 바뀌지 않음
+    fig, _ = w._figure([{**w.checked()[0], "style": {}}], "한 그래프")
+    assert len([a for a in fig.axes if a.get_xlabel()]) == 1 and fig.axes[0].get_xlim()[0] == -30

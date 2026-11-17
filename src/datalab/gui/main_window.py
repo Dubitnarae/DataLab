@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QImage, QKeySequence
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog,
-                               QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+                               QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
                                QScrollArea, QSplitter, QTableWidget, QTabWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from datalab import __author__, __version__
@@ -23,6 +24,7 @@ APP_TITLE = "DataLab"
 OPEN_FILTER = "데이터 (*.csv *.txt *.dat *.xy *.xrdml *.rasx);;모든 파일 (*)"
 TEMPLATE_DIR = Path.home() / "Documents" / "DataLab_Data" / "templates"  # CLAUDE.md: 사용자 데이터는 문서\DataLab_Data
 SAVE_FILTER ="PNG 600 dpi (*.png);;SVG 벡터 (*.svg);;PDF 벡터 (*.pdf);;TIFF 600 dpi (*.tif)"
+BATCH_EXT = {"PNG 600 dpi": ".png", "SVG 벡터": ".svg", "PDF 벡터": ".pdf", "TIFF 600 dpi": ".tif"}
 
 
 def _fmt(v) -> str:
@@ -337,6 +339,7 @@ class MainWindow(QMainWindow):
         m = self.menuBar().addMenu("파일")
         for text, key, fn in (("열기...", QKeySequence.StandardKey.Open, self.open_dialog),
                               ("그림 저장(PNG·SVG·PDF)...", QKeySequence.StandardKey.Save, self.save_dialog),
+                              ("일괄 내보내기(시료마다 한 장)...", "Ctrl+Shift+S", self.batch_dialog),
                               ("그림 클립보드 복사(PPT 붙여넣기)", "Ctrl+Shift+C", self.copy_figure),
                               ("그래프 템플릿 저장...", "Ctrl+Shift+T", self.save_template),
                               ("그래프 템플릿 불러오기...", "Ctrl+T", self.load_template),
@@ -416,19 +419,8 @@ class MainWindow(QMainWindow):
     def redraw(self):
         if getattr(self, "_hold", False):  # 템플릿 적용 중 — 값마다 다시 그리지 않음
             return
-        figures.apply_style(self.style.currentText(), self.font.currentText(), self.bw.isChecked())
-        self.fig = figures.new_figure(self.style.currentText())
         sel = self.checked()
-        if self.mode.currentText() == "VSM":
-            rows, panels = self._draw_vsm(sel)
-        else:
-            panels = figures.draw_xrd(self.fig, [(it["name"], it["data"].two_theta, it["data"].counts,
-                                                  it.get("style", {})) for it in sel],
-                                      self.wf.value(), self.norm.isChecked(), self.layout_box.currentText())
-            rows = [xrd_an.summary(it["xrd_result"]) for it in sel]
-        o = self._axes_opts()
-        for ax in panels:
-            figures.apply_axes(ax, o)
+        self.fig, rows = self._figure(sel, self.layout_box.currentText())
         self._show_table(sel, rows)
         while self.plot_layout.count():
             w = self.plot_layout.takeAt(0).widget()
@@ -447,7 +439,23 @@ class MainWindow(QMainWindow):
             canvas.draw()
             self.status.setText("축 제목 수식 오류: " + str(e).splitlines()[0])
 
-    def _draw_vsm(self, sel: list[dict]) -> list[dict]:
+    def _figure(self, sel: list[dict], layout: str):
+        """지금 옵션·편집 값으로 새 Figure와 결과 표 행을 만든다(화면·일괄 내보내기 공용)."""
+        figures.apply_style(self.style.currentText(), self.font.currentText(), self.bw.isChecked())
+        fig = figures.new_figure(self.style.currentText())
+        if self.mode.currentText() == "VSM":
+            rows, panels = self._draw_vsm(fig, sel, layout)
+        else:
+            panels = figures.draw_xrd(fig, [(it["name"], it["data"].two_theta, it["data"].counts,
+                                             it.get("style", {})) for it in sel],
+                                      self.wf.value(), self.norm.isChecked(), layout)
+            rows = [xrd_an.summary(it["xrd_result"]) for it in sel]
+        o = self._axes_opts()
+        for ax in panels:
+            figures.apply_axes(ax, o)
+        return fig, rows
+
+    def _draw_vsm(self, fig, sel: list[dict], layout: str) -> tuple[list[dict], list]:
         off = self.offset.value()
         ka = self.h_unit.currentText() == "kA/m"
         k = vsm_an.OE_TO_A_PER_M / 1000 if ka else 1.0
@@ -470,9 +478,8 @@ class MainWindow(QMainWindow):
             rows.append(row)
         u = sel[0]["data"] if sel else None
         h_label = "H (kA/m)" if ka and (u is None or u.h_unit == "Oe") else f"H ({u.h_unit if u else 'Oe'})"
-        panels = figures.draw_vsm(self.fig, data, h_label, f"M ({u.m_unit if u else 'emu/g'})", self.inset.isChecked(),
-                                  self.inset_w.value() * (k if u and u.h_unit == "Oe" else 1) or None,
-                                  self.layout_box.currentText())
+        panels = figures.draw_vsm(fig, data, h_label, f"M ({u.m_unit if u else 'emu/g'})", self.inset.isChecked(),
+                                  self.inset_w.value() * (k if u and u.h_unit == "Oe" else 1) or None, layout)
         return rows, panels
 
     def _show_table(self, sel: list[dict], rows: list[dict]):
@@ -495,6 +502,53 @@ class MainWindow(QMainWindow):
         if path:
             figures.save(self.fig, path)
             self.status.setText(f"저장: {path}")
+
+    def batch_export(self, folder: str | Path, ext: str) -> list[Path]:
+        """체크한 시료마다 한 장씩 같은 스타일로 저장(Origin Batch Plotting). 한 장에 시료 하나라 배치·오른쪽 Y축은 뺀다."""
+        paths = []
+        for it, path in zip(self.checked(), self._batch_paths(folder, ext)):
+            one = {**it, "style": {k: v for k, v in it.get("style", {}).items() if k not in ("panel", "right")}}
+            fig, _ = self._figure([one], "한 그래프")
+            paths.append(figures.save(fig, path))
+        return paths
+
+    def _batch_paths(self, folder: str | Path, ext: str) -> list[Path]:
+        """시료 이름 → 파일 경로. Windows에 못 쓰는 글자는 _, 같은 이름은 _2·_3을 붙여 서로 덮어쓰지 않게."""
+        out, used = [], set()
+        for it in self.checked():
+            stem = re.sub(r'[\\/:*?"<>|]', "_", it["name"]).strip(" .") or "graph"
+            name, n = stem, 1
+            while name.lower() in used:
+                n += 1
+                name = f"{stem}_{n}"
+            used.add(name.lower())
+            out.append(Path(folder) / (name + ext))
+        return out
+
+    def batch_dialog(self):
+        if not self.checked():
+            self.status.setText("체크한 시료가 없습니다.")
+            return
+        ext, ok = QInputDialog.getItem(self, "일괄 내보내기", "형식 (체크한 시료마다 한 장, 파일 이름 = 시료 이름)",
+                                       list(BATCH_EXT), 0, False)
+        if not ok:
+            return
+        folder = QFileDialog.getExistingDirectory(self, "저장할 폴더")
+        if not folder:
+            return
+        ext = BATCH_EXT[ext]
+        exist = [p.name for p in self._batch_paths(folder, ext) if p.exists()]
+        if exist and QMessageBox.question(self, "덮어쓰기", f"같은 이름 파일이 {len(exist)}개 있습니다. 덮어쓸까요?\n"
+                                          + "\n".join(exist[:10])) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            paths = self.batch_export(folder, ext)
+        except OSError as e:
+            QMessageBox.warning(self, "일괄 내보내기 실패", str(e))
+        else:
+            self.status.setText(f"{len(paths)}장 저장: {folder}")
+        finally:
+            self.redraw()  # 화면 그래프의 전역 스타일 상태를 되돌림
 
     def copy_figure(self):
         QApplication.clipboard().setImage(QImage.fromData(figures.png_bytes(self.fig)))
