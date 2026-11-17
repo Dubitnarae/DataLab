@@ -221,3 +221,21 @@ def test_batch_export(qtbot, tmp_path):
     assert w.fig is screen  # 화면 그래프는 바뀌지 않음
     fig, _ = w._figure([{**w.checked()[0], "style": {}}], "한 그래프")
     assert len([a for a in fig.axes if a.get_xlabel()]) == 1 and fig.axes[0].get_xlim()[0] == -30
+
+
+def test_vsm_background_and_dmdh(qtbot, tmp_path):
+    """M4 ⑥: 배경 기울기 빼기 → 결과 표에 χ·보정 전 값, 세로축 dM/dH → 축 제목·인셋 없음."""
+    from datalab.gui.main_window import MainWindow
+
+    h, m = loop(2.5)
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.open_paths([str(lakeshore(tmp_path, {"hc": 2.5, "mr": 10, "ms": 50}, h, m - 0.02 * h))])
+    w.bg.setChecked(True)
+    keys = [w.table.verticalHeaderItem(i).text() for i in range(w.table.rowCount())]
+    vals = {k: w.table.item(i, 0).text() for i, k in enumerate(keys)}
+    assert float(vals["배경 기울기 χ (emu/g/Oe)"]) == pytest.approx(-0.02) and float(vals["Ms (emu/g)"]) == pytest.approx(50)
+    w.vsm_y.setCurrentText("dM/dH")
+    ax = w.fig.axes[0]
+    assert ax.get_ylabel() == "dM/dH (emu/g/Oe)" and len(w.fig.axes) == 1  # 인셋 없음
+    assert w.template()["vsm_y"] == "dM/dH" and "bg" not in w.template()

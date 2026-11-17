@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from datalab.analysis.vsm import analyze_loop, compare_device
+from datalab.analysis.vsm import analyze_loop, compare_device, dmdh, high_field_slope
 from datalab.io import load_any
 from datalab.io.vsm import UnsupportedVsmFile, read_vsm
 
@@ -101,3 +101,22 @@ def test_golden_real_files():
         assert res["Ms"] == pytest.approx(float(r["Ms"]), rel=0.005), r["file"]
         if r.get("Mr"):
             assert res["Mr"] == pytest.approx(float(r["Mr"]), rel=0.01), r["file"]
+
+
+def test_background_slope_removed():
+    """합성 루프에 반자성 배경 −0.02·H를 더해도 기울기를 찾아 빼면 Ms·Hc가 원래대로."""
+    h, m = loop(2.5)
+    chi = high_field_slope(h, m - 0.02 * h)
+    assert chi == pytest.approx(-0.02, abs=1e-9)
+    r = analyze_loop(h, m - 0.02 * h, slope=chi)
+    assert r["Ms"] == pytest.approx(50) and r["Hc"] == pytest.approx(2.5, abs=0.02)
+    assert high_field_slope(h[:3], m[:3]) is None
+
+
+def test_dmdh_peaks_at_switching_field():
+    h, m = loop(2.5)
+    d = dmdh(h, m)
+    assert np.isnan(d).sum() <= 2  # 되돌이점만 끊김
+    down = slice(0, h.size // 2)
+    assert abs(h[down][np.nanargmax(d[down])]) <= 12.5 + 1  # 내려가는 가지 기울기 4 구간(−12.5~+7.5) 안
+    assert np.nanmax(d) == pytest.approx(4)

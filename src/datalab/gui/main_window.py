@@ -83,14 +83,22 @@ class MainWindow(QMainWindow):
         self.h_unit = QComboBox()
         self.h_unit.addItems(["Oe", "kA/m"])
         self.offset = self._spin(-1e4, 1e4, 0, "", 0.01)
+        self.bg = QCheckBox("고자장 배경 기울기 빼기")
+        self.bg.setToolTip("홀더·반자성·상자성 배경(직선 χH)을 빼고 Ms·Hc를 다시 계산합니다. 기울기는 결과 표에 나옵니다.")
+        self.bg_frac = self._spin(10, 99, 70, "", 5)
+        self.bg_frac.setSuffix(" %")
+        self.bg_frac.setToolTip("|H|가 H 최대의 이 비율 이상인 점으로 기울기를 맞춤")
+        self.vsm_y = QComboBox()
+        self.vsm_y.addItems(["M", "dM/dH"])
+        self.vsm_y.setToolTip("dM/dH: 스위칭 자장 분포(SFD). 인셋은 그리지 않습니다.")
         self.wf = self._spin(0, 5, 0, "", 0.1)
         self.norm = QCheckBox("최댓값 1로 정규화")
         self.norm.setChecked(True)
-        for w in (self.style, self.font, self.h_unit, self.layout_box):
+        for w in (self.style, self.font, self.h_unit, self.layout_box, self.vsm_y):
             w.currentTextChanged.connect(lambda _: self.redraw())
-        for w in (self.inset, self.norm, self.bw):
+        for w in (self.inset, self.norm, self.bw, self.bg):
             w.toggled.connect(lambda _: self.redraw())
-        for w in (self.inset_w, self.offset, self.wf):
+        for w in (self.inset_w, self.offset, self.wf, self.bg_frac):
             w.valueChanged.connect(lambda _: self.redraw())
         form = QFormLayout()
         form.addRow("스타일", self.style)
@@ -102,6 +110,8 @@ class MainWindow(QMainWindow):
         form.addRow("인셋 H 반폭", self.inset_w)
         form.addRow("H 표시 단위", self.h_unit)
         form.addRow("자장 오프셋 보정(Oe)", self.offset)
+        form.addRow(self._row(self.bg, QLabel("맞춤 |H| ≥"), self.bg_frac))
+        form.addRow("세로축", self.vsm_y)
         form.addRow(QLabel("<b>XRD</b>"))
         form.addRow(self.norm)
         form.addRow("세로 띄우기(waterfall)", self.wf)
@@ -204,7 +214,7 @@ class MainWindow(QMainWindow):
         o = self._axes_opts()
         return {"datalab_template": 1, "mode": self.mode.currentText(), "style": self.style.currentText(),
                 "font": self.font.currentText(), "bw": self.bw.isChecked(), "layout": self.layout_box.currentText(), "inset": self.inset.isChecked(),
-                "inset_w": self.inset_w.value(), "h_unit": self.h_unit.currentText(),
+                "inset_w": self.inset_w.value(), "h_unit": self.h_unit.currentText(), "vsm_y": self.vsm_y.currentText(),
                 "norm": self.norm.isChecked(), "wf": self.wf.value(),
                 "legend": o["legend"], "y2title": o["y2title"],
                 "axes": {a: {k: o[a + k] for k in ("min", "max", "step", "log", "title")} for a in "xy"},
@@ -220,7 +230,8 @@ class MainWindow(QMainWindow):
                 self.mode.setCurrentText(t["mode"])  # 축 값을 비우므로 먼저
             for box, key, opts in ((self.style, "style", figures.STYLES), (self.font, "font", figures.FONTS),
                                    (self.layout_box, "layout", figures.LAYOUTS),
-                                   (self.h_unit, "h_unit", ("Oe", "kA/m")), (self.legend, "legend", figures.LEGEND_LOC)):
+                                   (self.h_unit, "h_unit", ("Oe", "kA/m")), (self.vsm_y, "vsm_y", ("M", "dM/dH")),
+                                   (self.legend, "legend", figures.LEGEND_LOC)):
                 if t.get(key) in opts:
                     box.setCurrentText(t[key])
             for chk, key in ((self.inset, "inset"), (self.norm, "norm"), (self.bw, "bw")):
@@ -459,26 +470,35 @@ class MainWindow(QMainWindow):
         off = self.offset.value()
         ka = self.h_unit.currentText() == "kA/m"
         k = vsm_an.OE_TO_A_PER_M / 1000 if ka else 1.0
+        deriv = self.vsm_y.currentText() == "dM/dH"
         data, rows = [], []
         for it in sel:
             d = it["data"]
             scale = k if d.h_unit == "Oe" else 1.0
-            data.append((it["name"], (d.h - off) * scale, d.m, it.get("style", {})))
-            raw = vsm_an.analyze_loop(d.h, d.m)
-            r = vsm_an.analyze_loop(d.h, d.m, off) if off else raw
             hu, mu = ("kA/m" if ka and d.h_unit == "Oe" else d.h_unit), d.m_unit
+            chi = vsm_an.high_field_slope(d.h - off, d.m, self.bg_frac.value() / 100) if self.bg.isChecked() else None
+            m = d.m - (chi or 0) * (d.h - off)
+            hp = (d.h - off) * scale
+            data.append((it["name"], hp, vsm_an.dmdh(hp, m) if deriv else m, it.get("style", {})))
+            raw = vsm_an.analyze_loop(d.h, d.m)
+            r = vsm_an.analyze_loop(d.h, d.m, off, chi or 0) if off or chi else raw
             hs = lambda v: v * scale if v is not None else None  # noqa: E731
             row = {"형식": d.file_format, f"Hc ({hu})": hs(r["Hc"]), f"Hc 반폭 ({hu})": hs(r["Hc_half"]),
                    f"H 치우침 ({hu})": hs(r["H_bias"]), f"Mr ({mu})": r["Mr"], f"Ms ({mu})": r["Ms"],
                    "Mr/Ms": r["SQ"], f"H 최대 ({hu})": hs(r["H_max"])}
-            if off:
+            if off or chi:
                 row[f"Hc 보정 전 ({hu})"] = hs(raw["Hc"])
+            if self.bg.isChecked():
+                row[f"배경 기울기 χ ({mu}/{hu})"] = chi / scale if chi is not None else "맞춤 점 부족"
+                row[f"Ms 보정 전 ({mu})"] = raw["Ms"]
             row["장비 값 대조"] = ("; ".join(vsm_an.compare_device(raw, d.device)) or "일치") if d.device else "장비 값 없음"
             row["해석 버전"] = vsm_an.ANALYSIS_VERSION
             rows.append(row)
         u = sel[0]["data"] if sel else None
         h_label = "H (kA/m)" if ka and (u is None or u.h_unit == "Oe") else f"H ({u.h_unit if u else 'Oe'})"
-        panels = figures.draw_vsm(fig, data, h_label, f"M ({u.m_unit if u else 'emu/g'})", self.inset.isChecked(),
+        mu = u.m_unit if u else "emu/g"
+        m_label = f"dM/dH ({mu}/{h_label[3:-1]})" if deriv else f"M ({mu})"
+        panels = figures.draw_vsm(fig, data, h_label, m_label, self.inset.isChecked() and not deriv,
                                   self.inset_w.value() * (k if u and u.h_unit == "Oe" else 1) or None, layout)
         return rows, panels
 
