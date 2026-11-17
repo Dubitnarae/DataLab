@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# 빌드·출력
+build/
+dist/
+out/
+*.spec
+
+# 실측 데이터(커밋 금지 — CLAUDE.md)
+samples/
+*.xrdml
+*.rasx
+*.RTF
+*.rtf
+
+# 상용 프로그램 사본(기능 비교용, 300 MB, 배포 금지)
+/레퍼런스 프로그램/

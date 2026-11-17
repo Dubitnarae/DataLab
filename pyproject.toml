@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datalab"
+version = "0.0.1"
+description = "R&D 데이터 해석·그래프 — VSM·XRD 해석, 논문·PPT용 그래프"
+authors = [{ name = "KIM YEONGDO" }]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "openpyxl>=3.1",
+    "PySide6>=6.6",
+    # XRD 판정·피크·Scherrer는 xrdcheck가 맡는다(CLAUDE.md: 복사·재구현 금지). 태그 고정.
+    "xrdcheck @ git+https://github.com/Dubitnarae/xrd-amorph-checker@v0.8.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4.4"]
+build = ["pyinstaller>=6.10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+datalab = ["data/*.ico"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "ignore:Enum value .Qt..ApplicationAttribute.AA_UseHighDpiPixmaps:DeprecationWarning",
+]
