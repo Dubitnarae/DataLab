@@ -1,6 +1,7 @@
 """논문·PPT용 그래프. 화면과 저장이 같은 Figure를 쓴다(크기도 프리셋 그대로).
 
 스타일 프리셋 3종(PLAN 1장): PPT용, 논문 1단(8.5 cm), 논문 2단(17.5 cm). 안쪽 눈금·네 변 눈금(Origin 기본과 같음).
+여기에 글꼴 선택과 흑백 출판(검정 + 실선·파선·점선·일점쇄선)을 겹쳐 쓴다.
 """
 
 from __future__ import annotations
@@ -33,12 +34,23 @@ STYLES = {
 DPI = {".png": 600, ".tif": 600, ".tiff": 600}
 
 
-def apply_style(style: str) -> None:
-    """전역 rcParams를 프리셋으로 바꾼다. 눈금은 그릴 때 늦게 만들어지므로 rc_context로는 부족하다."""
+FONTS = ["Arial", "Times New Roman", "Calibri", "Malgun Gothic"]
+BW_LS = ["-", "--", ":", "-."]  # 흑백 출판: 색 대신 선 모양으로 구분
+
+
+def apply_style(style: str, font: str = "Arial", bw: bool = False) -> None:
+    """전역 rcParams를 프리셋으로 바꾼다. 눈금은 그릴 때 늦게 만들어지므로 rc_context로는 부족하다.
+    font는 글꼴 목록 맨 앞(없는 글자는 맑은 고딕으로 넘어감), bw면 선 색을 모두 검정(C0~C9 → k)."""
     import matplotlib
+    from cycler import cycler
 
     matplotlib.rcdefaults()
-    matplotlib.rcParams.update({**_BASE, **STYLES[style]["rc"]})
+    rc = {**_BASE, **STYLES[style]["rc"], "font.family": [font, *[f for f in _BASE["font.family"] if f != font]]}
+    if font == "Times New Roman":
+        rc["mathtext.fontset"] = "stix"  # 수식 글자도 Times 모양으로
+    if bw:
+        rc["axes.prop_cycle"] = cycler(color=["k"], linestyle=BW_LS[:1])
+    matplotlib.rcParams.update(rc)
 
 
 def new_figure(style: str) -> Figure:
@@ -91,7 +103,11 @@ def _legend(ax, min_n: int = 1, **kw) -> None:
 
 def _plot(ax, name, x, y, kw: dict, k: int):
     """kw: 편집 패널의 선 모양(color·lw·marker). 빈 값은 프리셋 기본, 색은 시료 순서(C0, C1…)로 고정 — 오른쪽 Y축도 같은 순서."""
-    kw = {"color": f"C{k % 10}", **{a: v for a, v in kw.items() if v and a not in _NOT_PLOT}}
+    import matplotlib
+
+    bw = matplotlib.rcParams["axes.prop_cycle"].by_key().get("linestyle")  # apply_style(bw=True)일 때만 있음
+    kw = {"color": f"C{k % 10}", **({"ls": BW_LS[k % len(BW_LS)]} if bw else {}),
+          **{a: v for a, v in kw.items() if v and a not in _NOT_PLOT}}
     if kw.get("marker"):
         # shortcut: 기호를 약 40개만 찍음(수천 점 루프가 굵은 띠가 되지 않게), 간격 지정 요청 오면 옵션으로
         kw.update(markevery=max(1, len(x) // 40), markerfacecolor="none")
@@ -149,7 +165,7 @@ def draw_vsm(fig: Figure, items: list[tuple[str, np.ndarray, np.ndarray, dict]],
             continue
         ins = p.inset_axes([0.58, 0.08, 0.38, 0.38])
         for (_, h, m, _), ln in mine:
-            ins.plot(h, m, color=ln.get_color(), lw=ln.get_linewidth() * 0.8)
+            ins.plot(h, m, color=ln.get_color(), ls=ln.get_linestyle(), lw=ln.get_linewidth() * 0.8)
         near = np.concatenate([m[np.abs(h) <= w] for (_, h, m, _), _ in mine])
         ins.set_xlim(-w, w)
         if near.size:

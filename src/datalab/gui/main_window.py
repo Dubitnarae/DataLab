@@ -68,6 +68,10 @@ class MainWindow(QMainWindow):
         # 오른쪽: 옵션·결과
         self.style = QComboBox()
         self.style.addItems(list(figures.STYLES))
+        self.font = QComboBox()
+        self.font.addItems(figures.FONTS)
+        self.bw = QCheckBox("흑백 출판(검정 + 선 모양으로 구분)")
+        self.bw.setToolTip("선 색을 모두 검정으로, 시료마다 실선·파선·점선·일점쇄선. 직접 고른 색은 그대로 둡니다.")
         self.layout_box = QComboBox()
         self.layout_box.addItems(list(figures.LAYOUTS))
         self.layout_box.setToolTip("패널이 여럿이면 체크한 시료를 차례대로 나눠 그림. 그래프 편집 탭에서 시료별 패널을 정할 수 있습니다.")
@@ -80,14 +84,16 @@ class MainWindow(QMainWindow):
         self.wf = self._spin(0, 5, 0, "", 0.1)
         self.norm = QCheckBox("최댓값 1로 정규화")
         self.norm.setChecked(True)
-        for w in (self.style, self.h_unit, self.layout_box):
+        for w in (self.style, self.font, self.h_unit, self.layout_box):
             w.currentTextChanged.connect(lambda _: self.redraw())
-        for w in (self.inset, self.norm):
+        for w in (self.inset, self.norm, self.bw):
             w.toggled.connect(lambda _: self.redraw())
         for w in (self.inset_w, self.offset, self.wf):
             w.valueChanged.connect(lambda _: self.redraw())
         form = QFormLayout()
         form.addRow("스타일", self.style)
+        form.addRow("글꼴", self.font)
+        form.addRow(self.bw)
         form.addRow("배치", self.layout_box)
         form.addRow(QLabel("<b>VSM</b>"))
         form.addRow(self.inset)
@@ -195,7 +201,7 @@ class MainWindow(QMainWindow):
         """지금 그래프 모양. 자장 오프셋은 측정 보정값이라 넣지 않는다. lines는 체크한 시료 순서대로."""
         o = self._axes_opts()
         return {"datalab_template": 1, "mode": self.mode.currentText(), "style": self.style.currentText(),
-                "layout": self.layout_box.currentText(), "inset": self.inset.isChecked(),
+                "font": self.font.currentText(), "bw": self.bw.isChecked(), "layout": self.layout_box.currentText(), "inset": self.inset.isChecked(),
                 "inset_w": self.inset_w.value(), "h_unit": self.h_unit.currentText(),
                 "norm": self.norm.isChecked(), "wf": self.wf.value(),
                 "legend": o["legend"], "y2title": o["y2title"],
@@ -210,11 +216,12 @@ class MainWindow(QMainWindow):
         try:
             if t.get("mode") in ("VSM", "XRD"):
                 self.mode.setCurrentText(t["mode"])  # 축 값을 비우므로 먼저
-            for box, key, opts in ((self.style, "style", figures.STYLES), (self.layout_box, "layout", figures.LAYOUTS),
+            for box, key, opts in ((self.style, "style", figures.STYLES), (self.font, "font", figures.FONTS),
+                                   (self.layout_box, "layout", figures.LAYOUTS),
                                    (self.h_unit, "h_unit", ("Oe", "kA/m")), (self.legend, "legend", figures.LEGEND_LOC)):
                 if t.get(key) in opts:
                     box.setCurrentText(t[key])
-            for chk, key in ((self.inset, "inset"), (self.norm, "norm")):
+            for chk, key in ((self.inset, "inset"), (self.norm, "norm"), (self.bw, "bw")):
                 if key in t:
                     chk.setChecked(bool(t[key]))
             for spin, key in ((self.inset_w, "inset_w"), (self.wf, "wf")):
@@ -409,7 +416,7 @@ class MainWindow(QMainWindow):
     def redraw(self):
         if getattr(self, "_hold", False):  # 템플릿 적용 중 — 값마다 다시 그리지 않음
             return
-        figures.apply_style(self.style.currentText())
+        figures.apply_style(self.style.currentText(), self.font.currentText(), self.bw.isChecked())
         self.fig = figures.new_figure(self.style.currentText())
         sel = self.checked()
         if self.mode.currentText() == "VSM":

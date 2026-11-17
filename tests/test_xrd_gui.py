@@ -162,3 +162,34 @@ def test_template_roundtrip(qtbot, tmp_path):
         b.apply_template({"style": "PPT용"})  # 템플릿 표시 없는 JSON은 거부
     b.apply_template({"datalab_template": 1, "style": "없는 프리셋", "lines": [{"marker": "?"}]})  # 모르는 값은 건너뜀
     assert b.style.currentText() == "논문 1단" and "marker" not in b.items[0]["style"]
+
+
+def test_bw_and_font(qtbot, tmp_path):
+    """M4 ④ 흑백 출판(검정 + 선 모양, 직접 고른 색은 유지)·글꼴 선택, 템플릿에도 담김."""
+    import matplotlib
+
+    from datalab.gui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    for i in range(3):
+        (tmp_path / f"d{i}").mkdir()
+        w.open_paths([str(lakeshore(tmp_path / f"d{i}", {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5 + i)))])
+    w.list.item(2).setSelected(True)
+    w._set_line(color="#ff0000")
+    w.bw.setChecked(True)
+    w.font.setCurrentText("Times New Roman")
+    lines = w.fig.axes[0].get_lines()[:3]
+    hexes = [matplotlib.colors.to_hex(ln.get_color()) for ln in lines]  # "C0"은 그릴 때의 색 순환으로 풀림
+    assert hexes == ["#000000", "#000000", "#ff0000"]
+    assert [ln.get_linestyle() for ln in lines] == ["-", "--", ":"]
+    ins = w.fig.axes[0].child_axes[0]  # 인셋도 같은 선 모양
+    assert ins.get_lines()[1].get_linestyle() == "--"
+    assert matplotlib.rcParams["font.family"][:2] == ["Times New Roman", "Arial"]
+    assert matplotlib.rcParams["mathtext.fontset"] == "stix"
+    t = w.template()
+    assert t["bw"] is True and t["font"] == "Times New Roman"
+    w.bw.setChecked(False)
+    w.font.setCurrentText("Arial")
+    w.apply_template(t)
+    assert w.bw.isChecked() and w.font.currentText() == "Times New Roman"
