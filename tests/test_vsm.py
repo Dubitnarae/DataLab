@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from datalab.analysis.vsm import analyze_loop, compare_device, dmdh, high_field_slope
+from datalab.analysis.vsm import analyze_loop, compare_device, dmdh, high_field_slope, smooth
 from datalab.io import load_any
 from datalab.io.vsm import UnsupportedVsmFile, read_vsm
 
@@ -120,3 +120,13 @@ def test_dmdh_peaks_at_switching_field():
     down = slice(0, h.size // 2)
     assert abs(h[down][np.nanargmax(d[down])]) <= 12.5 + 1  # 내려가는 가지 기울기 4 구간(−12.5~+7.5) 안
     assert np.nanmax(d) == pytest.approx(4)
+
+
+def test_smooth_and_smoothed_dmdh():
+    assert np.allclose(smooth(np.full(10, 3.0), 5), 3.0)  # 양 끝도 0 쪽으로 안 끌림
+    assert np.allclose(smooth([1.0, 2.0, 3.0], 0), [1, 2, 3])
+    h, m = loop(2.5)
+    noisy = m + np.random.default_rng(0).normal(0, 2, m.size)
+    raw, sm = dmdh(h, noisy), dmdh(h, noisy, 9)
+    clean = dmdh(h, m)
+    assert np.nanmean(np.abs(sm - clean)) < np.nanmean(np.abs(raw - clean)) / 2  # 잡음으로 튀는 값이 줄어듦

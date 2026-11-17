@@ -104,7 +104,8 @@ def test_panels_double_y(qtbot, tmp_path):
         w.open_paths([str(lakeshore(tmp_path / f"d{i}", {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5 + i)))])
     w.layout_box.setCurrentText("4패널(2×2)")
     panels = [a for a in w.fig.axes if a.get_xlabel()]
-    assert len(panels) == 4 and [len(a.get_lines()) - 2 for a in panels] == [1, 1, 1, 0]  # -2: 원점 가로·세로 선
+    assert len(panels) == 4 and [len(a.get_lines()) for a in panels] == [3, 3, 3, 0]  # 원점 가로·세로 선 2개 포함
+    assert not panels[3].axison  # 빈 패널은 축 숨김
     w.ax_w["x"]["min"].setText("-50")
     w.redraw()
     assert all(a.get_xlim()[0] == -50 for a in w.fig.axes if a.get_xlabel())  # 편집 값은 모든 패널에
@@ -240,6 +241,35 @@ def test_vsm_background_and_dmdh(qtbot, tmp_path):
     ax = w.fig.axes[0]
     assert ax.get_ylabel() == "dM/dH (emu/g/Oe)" and len(w.fig.axes) == 1  # 인셋 없음
     assert w.template()["vsm_y"] == "dM/dH" and "bg" not in w.template()
+    w.smooth.setValue(9)
+    assert w.template()["smooth"] == 9
+
+
+def test_known_limits_fixed(qtbot, tmp_path, recwarn):
+    """수식+한글 축 제목은 맑은 고딕(□ 없음), 빈 패널은 축 숨김, 흑백 선 모양 7종·인셋도 같은 파선."""
+    from datalab.gui.main_window import MainWindow
+    from datalab.plot import figures
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    for i in range(5):
+        (tmp_path / f"d{i}").mkdir()
+        w.open_paths([str(lakeshore(tmp_path / f"d{i}", {"hc": 2.5, "mr": 10, "ms": 50}, *loop(2.5 + i)))])
+    w.bw.setChecked(True)
+    lines = w.fig.axes[0].get_lines()[:5]
+    assert [ln.get_linestyle() for ln in lines[:4]] == ["-", "--", ":", "-."] and len(figures.BW_LS) == 7
+    ins = w.fig.axes[0].child_axes[0]
+    assert ins.get_lines()[4]._unscaled_dash_pattern == lines[4]._unscaled_dash_pattern
+    w.ax_w["x"]["title"].setText(r"자장 $\mu_0H$ (T)")
+    w.redraw()
+    assert w.fig.axes[0].xaxis.label.get_fontfamily() == ["Malgun Gothic"]
+    w.fig.canvas.draw()
+    assert not [x for x in recwarn if "glyph" in str(x.message)]
+    for i in range(1, 5):
+        w.list.item(i).setCheckState(Qt.CheckState.Unchecked)
+    w.layout_box.setCurrentText("4패널(2×2)")
+    panels = [a for a in w.fig.axes if a.get_subplotspec()]
+    assert [a.axison for a in panels] == [True, False, False, False]
 
 
 def test_db_save_dedup(qtbot, tmp_path, xrd_file):

@@ -93,6 +93,10 @@ class MainWindow(QMainWindow):
         self.vsm_y = QComboBox()
         self.vsm_y.addItems(["M", "dM/dH"])
         self.vsm_y.setToolTip("dM/dH: 스위칭 자장 분포(SFD). 인셋은 그리지 않습니다.")
+        self.smooth = self._spin(0, 101, 0, "없음", 2)
+        self.smooth.setDecimals(0)
+        self.smooth.setSuffix(" 점")
+        self.smooth.setToolTip("dM/dH 평활화: M을 이 점 수로 이동평균한 뒤 미분(잡음이 많아 뾰족할 때). 결과 표 값은 바뀌지 않음")
         self.wf = self._spin(0, 5, 0, "", 0.1)
         self.norm = QCheckBox("최댓값 1로 정규화")
         self.norm.setChecked(True)
@@ -100,7 +104,7 @@ class MainWindow(QMainWindow):
             w.currentTextChanged.connect(lambda _: self.redraw())
         for w in (self.inset, self.norm, self.bw, self.bg):
             w.toggled.connect(lambda _: self.redraw())
-        for w in (self.inset_w, self.offset, self.wf, self.bg_frac):
+        for w in (self.inset_w, self.offset, self.wf, self.bg_frac, self.smooth):
             w.valueChanged.connect(lambda _: self.redraw())
         form = QFormLayout()
         form.addRow("스타일", self.style)
@@ -113,7 +117,7 @@ class MainWindow(QMainWindow):
         form.addRow("H 표시 단위", self.h_unit)
         form.addRow("자장 오프셋 보정(Oe)", self.offset)
         form.addRow(self._row(self.bg, QLabel("맞춤 |H| ≥"), self.bg_frac))
-        form.addRow("세로축", self.vsm_y)
+        form.addRow("세로축", self._row(self.vsm_y, QLabel("평활화"), self.smooth))
         form.addRow(QLabel("<b>XRD</b>"))
         form.addRow(self.norm)
         form.addRow("세로 띄우기(waterfall)", self.wf)
@@ -156,8 +160,7 @@ class MainWindow(QMainWindow):
             w["min"].setPlaceholderText("최소")
             w["max"].setPlaceholderText("최대")
             w["title"].setPlaceholderText("기본 (수식: $M_s$, $\\mu_0H$)")
-            # shortcut: matplotlib 수식은 글꼴 대체가 안 돼 $가 든 제목의 한글은 □로 나옴, 요청 오면 수식 글꼴 설정
-            w["title"].setToolTip("$...$ 안은 수식(위첨자 ^, 아래첨자 _, \\mu 등). $가 든 제목에는 한글을 쓰지 마세요.")
+            w["title"].setToolTip("$...$ 안은 수식(위첨자 ^, 아래첨자 _, \\mu 등). 수식과 한글을 함께 쓰면 그 제목은 맑은 고딕으로 나옵니다.")
             for k in ("min", "max", "title"):
                 w[k].editingFinished.connect(self.redraw)
             w["step"].valueChanged.connect(lambda _: self.redraw())
@@ -219,7 +222,7 @@ class MainWindow(QMainWindow):
         o = self._axes_opts()
         return {"datalab_template": 1, "mode": self.mode.currentText(), "style": self.style.currentText(),
                 "font": self.font.currentText(), "bw": self.bw.isChecked(), "layout": self.layout_box.currentText(), "inset": self.inset.isChecked(),
-                "inset_w": self.inset_w.value(), "h_unit": self.h_unit.currentText(), "vsm_y": self.vsm_y.currentText(),
+                "inset_w": self.inset_w.value(), "h_unit": self.h_unit.currentText(), "vsm_y": self.vsm_y.currentText(), "smooth": self.smooth.value(),
                 "norm": self.norm.isChecked(), "wf": self.wf.value(),
                 "legend": o["legend"], "y2title": o["y2title"],
                 "axes": {a: {k: o[a + k] for k in ("min", "max", "step", "log", "title")} for a in "xy"},
@@ -242,7 +245,7 @@ class MainWindow(QMainWindow):
             for chk, key in ((self.inset, "inset"), (self.norm, "norm"), (self.bw, "bw")):
                 if key in t:
                     chk.setChecked(bool(t[key]))
-            for spin, key in ((self.inset_w, "inset_w"), (self.wf, "wf")):
+            for spin, key in ((self.inset_w, "inset_w"), (self.wf, "wf"), (self.smooth, "smooth")):
                 if isinstance(t.get(key), (int, float)):
                     spin.setValue(t[key])
             self.y2title.setText(str(t.get("y2title") or ""))
@@ -533,7 +536,7 @@ class MainWindow(QMainWindow):
             chi = vsm_an.high_field_slope(d.h - off, d.m, self.bg_frac.value() / 100) if self.bg.isChecked() else None
             m = d.m - (chi or 0) * (d.h - off)
             hp = (d.h - off) * scale
-            data.append((it["name"], hp, vsm_an.dmdh(hp, m) if deriv else m, it.get("style", {})))
+            data.append((it["name"], hp, vsm_an.dmdh(hp, m, int(self.smooth.value())) if deriv else m, it.get("style", {})))
             raw = vsm_an.analyze_loop(d.h, d.m)
             r = vsm_an.analyze_loop(d.h, d.m, off, chi or 0) if off or chi else raw
             hs = lambda v: v * scale if v is not None else None  # noqa: E731

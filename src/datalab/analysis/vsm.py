@@ -36,10 +36,19 @@ def high_field_slope(h: np.ndarray, m: np.ndarray, frac: float = 0.7) -> float |
     return float(np.linalg.lstsq(a, m[sel], rcond=None)[0][0])
 
 
-def dmdh(h: np.ndarray, m: np.ndarray) -> np.ndarray:
-    """측정 순서대로의 dM/dH(스위칭 자장 분포). 루프 끝 되돌이점처럼 H가 거의 안 변하는 곳은 NaN(끊어 그림)."""
-    # shortcut: 평활화 없음 — 잡음 많은 파일에서 뾰족하면 이동평균 옵션 추가
-    dh, dm = np.gradient(np.asarray(h, float)), np.gradient(np.asarray(m, float))
+def smooth(y: np.ndarray, n: int) -> np.ndarray:
+    """측정 순서대로 n점 이동평균(가운데 기준). 양 끝은 있는 점만으로 평균해 값이 0 쪽으로 끌리지 않는다."""
+    y = np.asarray(y, float)
+    if n < 2 or y.size < 2:
+        return y
+    k = np.ones(min(int(n), y.size))
+    return np.convolve(y, k, "same") / np.convolve(np.ones_like(y), k, "same")
+
+
+def dmdh(h: np.ndarray, m: np.ndarray, n_smooth: int = 0) -> np.ndarray:
+    """측정 순서대로의 dM/dH(스위칭 자장 분포). 루프 끝 되돌이점처럼 H가 거의 안 변하는 곳은 NaN(끊어 그림).
+    n_smooth ≥ 2면 M을 그 점 수로 이동평균한 뒤 미분(잡음으로 뾰족한 곡선 완화)."""
+    dh, dm = np.gradient(np.asarray(h, float)), np.gradient(smooth(m, n_smooth))
     ok = np.abs(dh) > 0.1 * np.median(np.abs(dh))
     return np.where(ok, dm / np.where(ok, dh, 1.0), np.nan)
 

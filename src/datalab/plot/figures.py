@@ -35,7 +35,8 @@ DPI = {".png": 600, ".tif": 600, ".tiff": 600}
 
 
 FONTS = ["Arial", "Times New Roman", "Calibri", "Malgun Gothic"]
-BW_LS = ["-", "--", ":", "-."]  # 흑백 출판: 색 대신 선 모양으로 구분
+# 흑백 출판: 색 대신 선 모양으로 구분(실선·파선·점선·일점쇄선·이점쇄선·긴 파선·촘촘한 점선)
+BW_LS = ["-", "--", ":", "-.", (0, (5, 1.5, 1, 1.5, 1, 1.5)), (0, (10, 3)), (0, (1, 1))]
 
 
 def apply_style(style: str, font: str = "Arial", bw: bool = False) -> None:
@@ -128,9 +129,11 @@ def apply_axes(ax, o: dict) -> None:
             getattr(ax, f"{a}axis").set_major_locator(MultipleLocator(o[f"{a}step"]))
         if o.get(f"{a}title"):
             getattr(ax, f"set_{a}label")(o[f"{a}title"])  # $...$ 안은 mathtext(위첨자·그리스 문자)
+            _hangul_math(getattr(ax, f"{a}axis").label)
     if o.get("y2title"):
         for t in _siblings(ax)[1:]:
             t.set_ylabel(o["y2title"])
+            _hangul_math(t.yaxis.label)
     leg = o.get("legend") or "자동"
     if leg == "숨김":
         _legend(ax, min_n=10**9)
@@ -138,6 +141,21 @@ def apply_axes(ax, o: dict) -> None:
         _legend(ax, loc="upper left", bbox_to_anchor=(1.02, 1))
     elif leg != "자동":
         _legend(ax, loc=LEGEND_LOC[leg])
+
+
+def _hangul_math(label) -> None:
+    """$수식$이 든 글은 matplotlib가 글꼴 목록 첫 글꼴 하나만 써서 한글이 □가 됨 — 그 글만 맑은 고딕(라틴 글자도 있음)으로."""
+    s = label.get_text()
+    if "$" in s and any("가" <= c <= "힣" or "ㄱ" <= c <= "ㆎ" for c in s):
+        label.set_fontfamily(["Malgun Gothic"])
+
+
+def _hide_empty(panels, axs) -> None:
+    """시료가 하나도 없는 패널은 축을 숨김(빈 0~1 축 대신 빈 칸). 아무것도 안 그렸으면 그대로."""
+    if axs:
+        for p in panels:
+            if not any(a in axs for a in _siblings(p)):
+                p.set_axis_off()
 
 
 def _labels(panels, xlabel, ylabel):
@@ -157,7 +175,10 @@ def draw_vsm(fig: Figure, items: list[tuple[str, np.ndarray, np.ndarray, dict]],
     _labels(panels, h_label, m_label)
     hmax = max((float(np.abs(h).max()) for _, h, _, _ in items), default=1.0)
     w = inset_half_width or hmax * 0.02
+    _hide_empty(panels, axs)
     for p in panels:
+        if not p.axison:
+            continue
         p.axhline(0, color="0.6", lw=0.5, zorder=0)
         p.axvline(0, color="0.6", lw=0.5, zorder=0)
         mine = [(it, ln) for it, ax, ln in zip(items, axs, lines) if ax is p]  # 오른쪽 Y축 시료는 눈금이 달라 인셋에서 뺌
@@ -165,7 +186,9 @@ def draw_vsm(fig: Figure, items: list[tuple[str, np.ndarray, np.ndarray, dict]],
             continue
         ins = p.inset_axes([0.58, 0.08, 0.38, 0.38])
         for (_, h, m, _), ln in mine:
-            ins.plot(h, m, color=ln.get_color(), ls=ln.get_linestyle(), lw=ln.get_linewidth() * 0.8)
+            il = ins.plot(h, m)[0]
+            il.update_from(ln)  # 색·선 모양(흑백 사용자 파선 포함) 그대로
+            il.set(lw=ln.get_linewidth() * 0.8, marker="")
         near = np.concatenate([m[np.abs(h) <= w] for (_, h, m, _), _ in mine])
         ins.set_xlim(-w, w)
         if near.size:
@@ -188,6 +211,7 @@ def draw_xrd(fig: Figure, items: list[tuple[str, np.ndarray, np.ndarray, dict]],
         i = nth[ax] = nth.get(ax, -1) + 1
         _plot(ax, name, x, y + i * offset * (1 if normalize else float(y.max())), kw, k)
     _labels(panels, "2θ (°)", "Intensity (a.u.)" if normalize else "Intensity (counts)")
+    _hide_empty(panels, axs)
     if normalize:
         for a in fig.axes:
             a.set_yticklabels([])
